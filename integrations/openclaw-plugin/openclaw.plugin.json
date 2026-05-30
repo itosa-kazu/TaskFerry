@@ -8,9 +8,10 @@
   },
   "configSchema": {
     "type": "object",
-    "additionalProperties": false,
-    "properties": {}
+    "properties": {},
+    "additionalProperties": false
   },
+  "uiHints": {},
   "contracts": {
     "tools": [
       "taskferry_health",
@@ -27,6 +28,5 @@
       "taskferry_request_revision",
       "taskferry_complete_task"
     ]
-  },
-  "uiHints": {}
+  }
 }
