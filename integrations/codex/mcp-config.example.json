@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "taskferry": {
+      "command": "C:\\path\\to\\taskferry-mcp.exe",
+      "env": {
+        "TASKFERRY_LOCAL_URL": "http://127.0.0.1:4318",
+        "TASKFERRY_LOCAL_API_TOKEN": "<local API token>"
+      }
+    }
+  }
+}

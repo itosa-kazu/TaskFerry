@@ -10,6 +10,8 @@ try {
     go test ./...
     go build -trimpath -o (Join-Path $dist "taskferry-relay.exe") ./cmd/relay
     go build -trimpath -o (Join-Path $dist "taskferry-client.exe") ./cmd/client
+    go build -trimpath -o (Join-Path $dist "taskferry.exe") ./cmd/taskferry
+    go build -trimpath -o (Join-Path $dist "taskferry-mcp.exe") ./cmd/taskferry-mcp
     go build -trimpath -o (Join-Path $dist "taskferry-writer-agent.exe") ./cmd/writer-agent
     go build -trimpath -o (Join-Path $dist "taskferry-requester-agent.exe") ./cmd/requester-agent
 } finally {

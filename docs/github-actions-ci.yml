@@ -19,4 +19,4 @@ jobs:
           go-version: "1.22.x"
           cache: true
       - run: go test ./...
-      - run: go build ./cmd/relay ./cmd/client ./cmd/writer-agent ./cmd/requester-agent
+      - run: go build ./cmd/relay ./cmd/client ./cmd/taskferry ./cmd/taskferry-mcp ./cmd/writer-agent ./cmd/requester-agent

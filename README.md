@@ -87,7 +87,7 @@ Install Go 1.22+.
 ```powershell
 go mod tidy
 go test ./...
-go build ./cmd/relay ./cmd/client ./cmd/writer-agent ./cmd/requester-agent
+go build ./cmd/relay ./cmd/client ./cmd/taskferry ./cmd/taskferry-mcp ./cmd/writer-agent ./cmd/requester-agent
 ```
 
 ## Run Locally
@@ -198,6 +198,7 @@ Operator docs:
 
 - [Official relay operations](./docs/official-relay.md)
 - [Agent install prompt](./docs/agent-install-prompt.md)
+- [Runtime integrations](./docs/runtime-integrations.md)
 
 ## Environment Variables
 
