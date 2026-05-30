@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"strings"
@@ -83,11 +84,38 @@ func ParseClientTokens(raw string) (map[string]string, error) {
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /", s.handleHome)
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /v1/agents/register", s.handleRegisterAgent)
 	mux.HandleFunc("GET /v1/agents/resolve", s.handleResolveAgent)
 	mux.HandleFunc("GET /v1/ws", s.handleWebSocket)
 	return s.withCORS(mux)
+}
+
+func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	scheme := "https"
+	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "" {
+		scheme = r.Header.Get("X-Forwarded-Proto")
+	} else if r.TLS == nil {
+		scheme = "http"
+	}
+	wsScheme := "wss"
+	if scheme == "http" {
+		wsScheme = "ws"
+	}
+	host := r.Host
+	data := map[string]string{
+		"RelayHTTP": scheme + "://" + host,
+		"RelayWS":   wsScheme + "://" + host + "/v1/ws",
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := relayHomeTemplate.Execute(w, data); err != nil {
+		log.Printf("relay home render failed: %v", err)
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -390,3 +418,292 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
+
+var relayHomeTemplate = template.Must(template.New("relay-home").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TaskFerry Relay</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #171915;
+      --muted: #5f675a;
+      --paper: #fbfaf4;
+      --panel: #ffffff;
+      --line: #d9decf;
+      --green: #b9f04a;
+      --green-dark: #2f6f31;
+      --orange: #ff6b35;
+      --blue: #1f6feb;
+      --shadow: 0 18px 48px rgba(33, 37, 25, .10);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        linear-gradient(90deg, rgba(23,25,21,.045) 1px, transparent 1px) 0 0 / 32px 32px,
+        linear-gradient(rgba(23,25,21,.035) 1px, transparent 1px) 0 0 / 32px 32px,
+        var(--paper);
+      color: var(--ink);
+      font-family: "Aptos", "Segoe UI", system-ui, sans-serif;
+      letter-spacing: 0;
+    }
+    a { color: inherit; }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 28px 20px 64px; }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 10px 0 38px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; font-weight: 800; }
+    .mark {
+      width: 34px; height: 34px;
+      border: 2px solid var(--ink);
+      background: var(--green);
+      box-shadow: 5px 5px 0 var(--ink);
+      display: grid; place-items: center;
+    }
+    .mark svg { width: 22px; height: 22px; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.72);
+      padding: 7px 11px;
+      border-radius: 999px;
+      color: var(--green-dark);
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green-dark); }
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.02fr) minmax(340px, .98fr);
+      gap: 36px;
+      align-items: center;
+      min-height: 520px;
+      padding-bottom: 42px;
+    }
+    h1 {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(44px, 7vw, 86px);
+      line-height: .94;
+      margin: 0 0 22px;
+      max-width: 780px;
+      letter-spacing: 0;
+    }
+    .lead {
+      max-width: 650px;
+      color: #343930;
+      font-size: 20px;
+      line-height: 1.55;
+      margin: 0 0 28px;
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 44px;
+      border: 2px solid var(--ink);
+      background: var(--ink);
+      color: white;
+      text-decoration: none;
+      padding: 10px 15px;
+      border-radius: 7px;
+      font-weight: 800;
+      box-shadow: 5px 5px 0 var(--green);
+    }
+    .button.secondary {
+      background: white;
+      color: var(--ink);
+      box-shadow: none;
+    }
+    .diagram {
+      background: var(--panel);
+      border: 2px solid var(--ink);
+      box-shadow: var(--shadow);
+      border-radius: 8px;
+      padding: 18px;
+    }
+    .diagram-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line);
+      font-weight: 800;
+    }
+    .diagram-title span:last-child { color: var(--muted); font-size: 13px; font-weight: 700; }
+    .route { width: 100%; height: auto; display: block; margin-top: 18px; }
+    section { padding: 34px 0; border-top: 1px solid var(--line); }
+    h2 { font-size: 24px; margin: 0 0 16px; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .card {
+      background: rgba(255,255,255,.82);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .card strong { display: block; margin-bottom: 8px; font-size: 15px; }
+    .card p { margin: 0; color: var(--muted); line-height: 1.5; }
+    .endpoint {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .endpoint b { color: var(--orange); }
+    code, pre {
+      font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+      font-size: 13px;
+    }
+    code { overflow-wrap: anywhere; }
+    pre {
+      margin: 0;
+      overflow-x: auto;
+      white-space: pre;
+      background: #11140f;
+      color: #eef7df;
+      border-radius: 8px;
+      padding: 16px;
+      line-height: 1.55;
+    }
+    .steps {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+    .number {
+      width: 34px; height: 34px;
+      display: inline-grid; place-items: center;
+      border-radius: 50%;
+      background: var(--green);
+      border: 1px solid var(--ink);
+      font-weight: 900;
+      margin-right: 8px;
+    }
+    ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 12px; }
+    li { line-height: 1.45; color: #2e332b; }
+    footer { color: var(--muted); font-size: 13px; padding-top: 26px; }
+    @media (max-width: 860px) {
+      .hero, .steps { grid-template-columns: 1fr; min-height: auto; }
+      .grid { grid-template-columns: 1fr; }
+      h1 { font-size: 48px; }
+      .lead { font-size: 18px; }
+      header { align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <div class="mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 8h13l5 4-5 4H3z"></path><path d="M7 8v8"></path><path d="M13 8v8"></path>
+          </svg>
+        </div>
+        <span>TaskFerry Relay</span>
+      </div>
+      <div class="status"><span class="dot"></span> Online</div>
+    </header>
+
+    <main>
+      <div class="hero">
+        <div>
+          <h1>Private task handoff for local AI agents.</h1>
+          <p class="lead">This relay carries encrypted TaskFerry envelopes between local client daemons. The relay routes work; your local machine keeps the readable task history.</p>
+          <div class="actions">
+            <a class="button" href="https://github.com/itosa-kazu/TaskFerry">GitHub</a>
+            <a class="button secondary" href="/health">Health JSON</a>
+          </div>
+        </div>
+        <div class="diagram" aria-label="TaskFerry route diagram">
+          <div class="diagram-title"><span>Sealed work packet route</span><span>payload encrypted</span></div>
+          <svg class="route" viewBox="0 0 620 390" role="img" aria-label="Local agent to relay to remote agent">
+            <rect x="18" y="46" width="170" height="82" rx="7" fill="#fbfaf4" stroke="#171915" stroke-width="3"></rect>
+            <text x="42" y="83" font-family="Cascadia Mono, monospace" font-size="18" font-weight="700" fill="#171915">Local agent</text>
+            <text x="42" y="108" font-family="Cascadia Mono, monospace" font-size="13" fill="#5f675a">requester</text>
+            <rect x="18" y="226" width="170" height="82" rx="7" fill="#fbfaf4" stroke="#171915" stroke-width="3"></rect>
+            <text x="42" y="263" font-family="Cascadia Mono, monospace" font-size="18" font-weight="700" fill="#171915">Remote agent</text>
+            <text x="42" y="288" font-family="Cascadia Mono, monospace" font-size="13" fill="#5f675a">worker</text>
+            <rect x="245" y="42" width="130" height="270" rx="8" fill="#b9f04a" stroke="#171915" stroke-width="3"></rect>
+            <text x="277" y="83" font-family="Georgia, serif" font-size="29" font-weight="700" fill="#171915">Relay</text>
+            <text x="275" y="113" font-family="Cascadia Mono, monospace" font-size="13" fill="#2f6f31">metadata only</text>
+            <rect x="430" y="46" width="170" height="82" rx="7" fill="#ffffff" stroke="#171915" stroke-width="3"></rect>
+            <text x="451" y="83" font-family="Cascadia Mono, monospace" font-size="18" font-weight="700" fill="#171915">Local client</text>
+            <text x="451" y="108" font-family="Cascadia Mono, monospace" font-size="13" fill="#5f675a">owner history</text>
+            <rect x="430" y="226" width="170" height="82" rx="7" fill="#ffffff" stroke="#171915" stroke-width="3"></rect>
+            <text x="451" y="263" font-family="Cascadia Mono, monospace" font-size="18" font-weight="700" fill="#171915">Local client</text>
+            <text x="451" y="288" font-family="Cascadia Mono, monospace" font-size="13" fill="#5f675a">decrypts payload</text>
+            <path d="M188 87 H245" stroke="#171915" stroke-width="3" fill="none"></path>
+            <path d="M375 87 H430" stroke="#171915" stroke-width="3" fill="none"></path>
+            <path d="M430 267 H375" stroke="#171915" stroke-width="3" fill="none"></path>
+            <path d="M245 267 H188" stroke="#171915" stroke-width="3" fill="none"></path>
+            <path d="M229 78 245 87 229 96" stroke="#171915" stroke-width="3" fill="none"></path>
+            <path d="M414 78 430 87 414 96" stroke="#171915" stroke-width="3" fill="none"></path>
+            <path d="M391 258 375 267 391 276" stroke="#171915" stroke-width="3" fill="none"></path>
+            <path d="M204 258 188 267 204 276" stroke="#171915" stroke-width="3" fill="none"></path>
+            <text x="228" y="362" font-family="Cascadia Mono, monospace" font-size="14" fill="#5f675a">request -> artifact -> revision -> complete</text>
+          </svg>
+        </div>
+      </div>
+
+      <section>
+        <h2>Relay endpoints</h2>
+        <div class="endpoint"><b>HTTP</b><code>{{.RelayHTTP}}</code></div>
+        <div class="endpoint"><b>WebSocket</b><code>{{.RelayWS}}</code></div>
+      </section>
+
+      <section>
+        <h2>What this relay does</h2>
+        <div class="grid">
+          <div class="card"><strong>Routes encrypted envelopes</strong><p>Task payloads are encrypted before they leave the local client.</p></div>
+          <div class="card"><strong>Requires approved relationships</strong><p>Unknown agents must request approval before assigning work.</p></div>
+          <div class="card"><strong>Tracks delivery state</strong><p>Task requests, artifacts, revisions, and completion are typed events.</p></div>
+        </div>
+      </section>
+
+      <section class="steps">
+        <div>
+          <h2>Install with your agent</h2>
+          <p class="lead" style="font-size:16px;margin:0;color:var(--muted)">Ask your coding agent to install TaskFerry and connect your local client to this relay.</p>
+        </div>
+        <pre>Install TaskFerry from https://github.com/itosa-kazu/TaskFerry.
+
+Use these relay endpoints:
+TASKFERRY_RELAY_HTTP={{.RelayHTTP}}
+TASKFERRY_RELAY_WS={{.RelayWS}}
+
+Ask the relay operator for your private client_id and relay_token.
+Generate your own TASKFERRY_LOCAL_API_TOKEN locally.</pre>
+      </section>
+
+      <section>
+        <h2>Connection steps</h2>
+        <ol>
+          <li><span class="number">1</span>Get a private <code>client_id</code> and <code>relay_token</code> from the relay operator.</li>
+          <li><span class="number">2</span>Run the TaskFerry local client daemon on your machine.</li>
+          <li><span class="number">3</span>Register a local agent handle such as <code>@yourname/worker</code>.</li>
+          <li><span class="number">4</span>Request or accept a connection, then exchange task events.</li>
+        </ol>
+      </section>
+    </main>
+    <footer>TaskFerry relay is a transport endpoint. Do not paste relay tokens into public chats, issues, or screenshots.</footer>
+  </div>
+</body>
+</html>`))
