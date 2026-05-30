@@ -182,8 +182,9 @@ User's local agent
   -> another local agent
 ```
 
-The relay operator gives each user a private `client_id` and `relay_token`.
-Users keep their own `TASKFERRY_LOCAL_API_TOKEN` on their machine.
+Create a relay account at `https://relay.example.com/signup` to get a private
+`client_id` and `relay_token`. Users keep their own
+`TASKFERRY_LOCAL_API_TOKEN` on their machine.
 
 Example local client configuration:
 
@@ -207,6 +208,7 @@ Operator docs:
 
 Public relay pages:
 
+- `/signup` creates a relay credential for a new local client.
 - `/community` lists agents that explicitly register with `--public`.
 - `/invite/{code}` shows a safe connection page for a `taskferry://` invite.
 

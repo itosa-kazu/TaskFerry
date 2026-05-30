@@ -44,6 +44,47 @@ func TestTokenOKPrefersPerClientTokens(t *testing.T) {
 	}
 }
 
+func TestTokenOKAcceptsSelfSignupClient(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	cred, err := store.CreateClient("Alice", "alice@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(store, AuthConfig{})
+	if !s.tokenOK(cred.ClientID, cred.Token) {
+		t.Fatal("expected database client token to pass")
+	}
+	if s.tokenOK(cred.ClientID, "wrong") {
+		t.Fatal("expected wrong database token to fail")
+	}
+}
+
+func TestSignupCreatesClientCredential(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	cred, err := store.CreateClient("Alice", "alice@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cred.ClientID == "" || cred.Token == "" {
+		t.Fatalf("missing credential fields: %+v", cred)
+	}
+	token, err := store.ClientToken(cred.ClientID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != cred.Token {
+		t.Fatalf("stored token mismatch")
+	}
+}
+
 func TestStoreCreatesInvitesAndPublicDirectory(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "relay.db"))
 	if err != nil {

@@ -85,9 +85,12 @@ func ParseClientTokens(raw string) (map[string]string, error) {
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleHome)
+	mux.HandleFunc("GET /signup", s.handleSignupPage)
+	mux.HandleFunc("POST /signup", s.handleSignupPage)
 	mux.HandleFunc("GET /community", s.handleCommunity)
 	mux.HandleFunc("GET /invite/", s.handleInvitePage)
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("POST /v1/signup", s.handleSignupAPI)
 	mux.HandleFunc("POST /v1/agents/register", s.handleRegisterAgent)
 	mux.HandleFunc("GET /v1/agents/resolve", s.handleResolveAgent)
 	mux.HandleFunc("GET /v1/agents/invite", s.handleAgentInvite)
@@ -110,6 +113,68 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := relayHomeTemplate.Execute(w, data); err != nil {
 		log.Printf("relay home render failed: %v", err)
+	}
+}
+
+func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "invalid form", http.StatusBadRequest)
+			return
+		}
+		relayHTTP, relayWS := s.relayURLs(r)
+		cred, err := s.store.CreateClient(strings.TrimSpace(r.FormValue("owner_name")), strings.TrimSpace(r.FormValue("email")))
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = signupTemplate.Execute(w, map[string]any{"Error": "Could not create relay credential.", "RelayHTTP": relayHTTP, "RelayWS": relayWS})
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = signupTemplate.Execute(w, signupPageData(relayHTTP, relayWS, cred))
+		return
+	}
+	relayHTTP, relayWS := s.relayURLs(r)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := signupTemplate.Execute(w, map[string]any{"RelayHTTP": relayHTTP, "RelayWS": relayWS}); err != nil {
+		log.Printf("signup render failed: %v", err)
+	}
+}
+
+func (s *Server) handleSignupAPI(w http.ResponseWriter, r *http.Request) {
+	var req protocol.SignupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, protocol.SignupResponse{OK: false, Error: "invalid_json"})
+		return
+	}
+	relayHTTP, relayWS := s.relayURLs(r)
+	cred, err := s.store.CreateClient(strings.TrimSpace(req.OwnerName), strings.TrimSpace(req.Email))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, protocol.SignupResponse{OK: false, Error: "signup_failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, signupResponse(relayHTTP, relayWS, cred))
+}
+
+func signupPageData(relayHTTP string, relayWS string, cred ClientCredential) map[string]any {
+	resp := signupResponse(relayHTTP, relayWS, cred)
+	return map[string]any{
+		"Created":    true,
+		"ClientID":   resp.ClientID,
+		"RelayToken": resp.RelayToken,
+		"RelayHTTP":  resp.RelayHTTP,
+		"RelayWS":    resp.RelayWS,
+		"SetupHint":  resp.SetupHint,
+	}
+}
+
+func signupResponse(relayHTTP string, relayWS string, cred ClientCredential) protocol.SignupResponse {
+	return protocol.SignupResponse{
+		OK:         true,
+		ClientID:   cred.ClientID,
+		RelayToken: cred.Token,
+		RelayHTTP:  relayHTTP,
+		RelayWS:    relayWS,
+		SetupHint:  "Save this relay token now. The relay will not show it again.",
 	}
 }
 
@@ -482,7 +547,7 @@ func (s *Server) allowRate(clientID string) bool {
 }
 
 func (s *Server) authorized(r *http.Request, clientID string) bool {
-	if s.auth.GlobalToken == "" && len(s.auth.ClientTokens) == 0 {
+	if s.openRelayAuthMode() {
 		return true
 	}
 	return s.tokenOK(clientID, r.Header.Get("Authorization")) ||
@@ -491,7 +556,7 @@ func (s *Server) authorized(r *http.Request, clientID string) bool {
 }
 
 func (s *Server) tokenOK(clientID string, value string) bool {
-	if s.auth.GlobalToken == "" && len(s.auth.ClientTokens) == 0 {
+	if s.openRelayAuthMode() {
 		return true
 	}
 	token := normalizeToken(value)
@@ -502,11 +567,27 @@ func (s *Server) tokenOK(clientID string, value string) bool {
 		if expected, ok := s.auth.ClientTokens[clientID]; ok && tokenEqual(token, expected) {
 			return true
 		}
+		if s.store != nil {
+			if expected, err := s.store.ClientToken(clientID); err == nil && tokenEqual(token, expected) {
+				return true
+			}
+		}
 	}
 	if s.auth.GlobalToken != "" && tokenEqual(token, s.auth.GlobalToken) {
 		return true
 	}
 	return false
+}
+
+func (s *Server) openRelayAuthMode() bool {
+	if s.auth.GlobalToken != "" || len(s.auth.ClientTokens) > 0 {
+		return false
+	}
+	if s.store == nil {
+		return true
+	}
+	count, err := s.store.ClientCount()
+	return err == nil && count == 0
 }
 
 func normalizeToken(value string) string {
@@ -749,6 +830,7 @@ var relayHomeTemplate = template.Must(template.New("relay-home").Parse(`<!doctyp
           <h1>Private task handoff for local AI agents.</h1>
           <p class="lead">This relay carries encrypted TaskFerry envelopes between local client daemons. The relay routes work; your local machine keeps the readable task history.</p>
           <div class="actions">
+            <a class="button" href="/signup">Create relay account</a>
             <a class="button" href="https://github.com/itosa-kazu/TaskFerry">GitHub</a>
             <a class="button secondary" href="/community">Agent Community</a>
             <a class="button secondary" href="/health">Health JSON</a>
@@ -811,7 +893,7 @@ Use these relay endpoints:
 TASKFERRY_RELAY_HTTP={{.RelayHTTP}}
 TASKFERRY_RELAY_WS={{.RelayWS}}
 
-Ask the relay operator for your private client_id and relay_token.
+Create your relay account on {{.RelayHTTP}}/signup to get your private client_id and relay_token.
 Generate your own TASKFERRY_LOCAL_API_TOKEN locally.</pre>
       </section>
 
@@ -828,7 +910,7 @@ Generate your own TASKFERRY_LOCAL_API_TOKEN locally.</pre>
       <section>
         <h2>Connection steps</h2>
         <ol>
-          <li><span class="number">1</span>Get a private <code>client_id</code> and <code>relay_token</code> from the relay operator.</li>
+          <li><span class="number">1</span>Create a relay account to get a private <code>client_id</code> and <code>relay_token</code>.</li>
           <li><span class="number">2</span>Run the TaskFerry local client daemon on your machine.</li>
           <li><span class="number">3</span>Register a local agent handle such as <code>@yourname/worker</code>.</li>
           <li><span class="number">4</span>Request or accept a connection, then exchange task events.</li>
@@ -836,6 +918,82 @@ Generate your own TASKFERRY_LOCAL_API_TOKEN locally.</pre>
       </section>
     </main>
     <footer>TaskFerry relay is a transport endpoint. Do not paste relay tokens into public chats, issues, or screenshots.</footer>
+  </div>
+</body>
+</html>`))
+
+var signupTemplate = template.Must(template.New("relay-signup").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Create TaskFerry Relay Account</title>
+  <style>
+    :root { --ink:#171915; --muted:#5f675a; --paper:#fbfaf4; --line:#d9decf; --green:#b9f04a; --red:#a6362f; }
+    * { box-sizing:border-box; }
+    body {
+      margin:0;
+      background:
+        linear-gradient(90deg, rgba(23,25,21,.045) 1px, transparent 1px) 0 0 / 32px 32px,
+        linear-gradient(rgba(23,25,21,.035) 1px, transparent 1px) 0 0 / 32px 32px,
+        var(--paper);
+      color:var(--ink);
+      font-family:"Aptos", "Segoe UI", system-ui, sans-serif;
+      letter-spacing:0;
+    }
+    .wrap { max-width:860px; margin:0 auto; padding:42px 20px 72px; }
+    a { color:inherit; }
+    .toplink { display:inline-flex; text-decoration:none; border:1px solid var(--line); background:rgba(255,255,255,.72); border-radius:999px; padding:8px 12px; font-weight:800; margin-bottom:42px; }
+    h1 { font-family:Georgia, "Times New Roman", serif; font-size:clamp(44px, 7vw, 76px); line-height:.94; margin:0 0 18px; }
+    .lead { color:#343930; font-size:19px; line-height:1.55; max-width:720px; }
+    .panel { background:rgba(255,255,255,.88); border:1px solid var(--line); border-radius:8px; padding:18px; margin-top:24px; }
+    label { display:block; font-weight:800; margin:14px 0 6px; }
+    input { width:100%; min-height:42px; border:1px solid #cdd4c6; border-radius:7px; padding:9px 10px; font:inherit; background:white; }
+    button, .button { display:inline-flex; min-height:44px; align-items:center; border:2px solid var(--ink); background:var(--ink); color:white; text-decoration:none; padding:10px 14px; border-radius:7px; font-weight:900; box-shadow:5px 5px 0 var(--green); margin-top:16px; cursor:pointer; }
+    code, pre { font-family:"Cascadia Mono", Consolas, monospace; font-size:13px; overflow-wrap:anywhere; }
+    pre { overflow:auto; background:#11140f; color:#eef7df; border-radius:8px; padding:16px; line-height:1.55; }
+    .secret { border:2px solid var(--ink); background:#fff; padding:12px; border-radius:8px; }
+    .warning { color:var(--red); font-weight:800; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    @media (max-width:720px) { .grid { grid-template-columns:1fr; } h1 { font-size:42px; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <a class="toplink" href="/">Relay home</a>
+    <h1>Create your relay account.</h1>
+    <p class="lead">This creates a private relay credential for your local TaskFerry client. Your readable task history stays on your machine.</p>
+
+    {{if .Error}}
+    <section class="panel"><p class="warning">{{.Error}}</p></section>
+    {{end}}
+
+    {{if .Created}}
+    <section class="panel">
+      <h2>Save this now</h2>
+      <p class="warning">The relay token is shown once. Store it locally and do not paste it into public chats, issues, or screenshots.</p>
+      <div class="grid">
+        <div><strong>client_id</strong><div class="secret"><code>{{.ClientID}}</code></div></div>
+        <div><strong>relay_token</strong><div class="secret"><code>{{.RelayToken}}</code></div></div>
+      </div>
+      <pre>TASKFERRY_RELAY_HTTP={{.RelayHTTP}}
+TASKFERRY_RELAY_WS={{.RelayWS}}
+TASKFERRY_CLIENT_ID={{.ClientID}}
+TASKFERRY_RELAY_TOKEN={{.RelayToken}}
+TASKFERRY_LOCAL_API_TOKEN=&lt;generate locally&gt;</pre>
+      <p><a class="button" href="/community">Browse public agents</a></p>
+    </section>
+    {{else}}
+    <section class="panel">
+      <form method="post" action="/signup">
+        <label for="owner_name">Owner name</label>
+        <input id="owner_name" name="owner_name" placeholder="alice" autocomplete="name">
+        <label for="email">Email, optional</label>
+        <input id="email" name="email" placeholder="alice@example.com" autocomplete="email">
+        <button type="submit">Create relay credential</button>
+      </form>
+    </section>
+    {{end}}
   </div>
 </body>
 </html>`))

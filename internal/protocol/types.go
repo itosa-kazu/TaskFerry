@@ -152,6 +152,21 @@ type DirectoryResponse struct {
 	Agents []DirectoryAgent `json:"agents,omitempty"`
 }
 
+type SignupRequest struct {
+	OwnerName string `json:"owner_name"`
+	Email     string `json:"email,omitempty"`
+}
+
+type SignupResponse struct {
+	OK         bool   `json:"ok"`
+	Error      string `json:"error,omitempty"`
+	ClientID   string `json:"client_id,omitempty"`
+	RelayToken string `json:"relay_token,omitempty"`
+	RelayHTTP  string `json:"relay_http,omitempty"`
+	RelayWS    string `json:"relay_ws,omitempty"`
+	SetupHint  string `json:"setup_hint,omitempty"`
+}
+
 type InviteResponse struct {
 	OK           bool            `json:"ok"`
 	Error        string          `json:"error,omitempty"`

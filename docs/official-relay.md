@@ -19,6 +19,10 @@ Each external user/client gets:
 - `relay_token`
 - local setup instructions
 
+Users can create this credential themselves at `/signup`. The legacy
+`TASKFERRY_RELAY_CLIENT_TOKENS` env var remains available for operator-created
+or bootstrap credentials.
+
 Each user generates their own `TASKFERRY_LOCAL_API_TOKEN` locally. Do not ask
 users to share local API tokens with the relay operator.
 
@@ -89,7 +93,26 @@ Clicking a `taskferry://` invite should open the user's local client confirmatio
 page. The relay invite page is public; the local page decides which persistent
 local identity acts on the invite.
 
-## Add A User
+## User Signup
+
+Users can open:
+
+```text
+https://relay.example.com/signup
+```
+
+The page creates a `client_id` and one-time visible `relay_token`. API clients
+can call:
+
+```bash
+curl -X POST https://relay.example.com/v1/signup \
+  -H 'Content-Type: application/json' \
+  -d '{"owner_name":"alice","email":"alice@example.com"}'
+```
+
+The relay token is a secret; users should save it locally.
+
+## Operator-Created Credential
 
 Generate one client credential:
 
@@ -110,9 +133,8 @@ it privately.
 
 ## Current Limitations
 
-- Adding a client token currently requires editing the relay env and restarting
-  the relay.
-- There is no hosted self-service account system yet.
+- Signup is open and intentionally lightweight. Abuse controls are limited to
+  relay rate limits in the current core.
 - Relay metadata is visible to the relay operator. Payload content should remain
   encrypted.
 - The local client does not yet have a native installer or background service

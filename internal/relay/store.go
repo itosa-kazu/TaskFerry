@@ -29,6 +29,15 @@ type AgentInvite struct {
 	UpdatedAt string
 }
 
+type ClientCredential struct {
+	ClientID  string
+	Token     string
+	OwnerName string
+	Email     string
+	CreatedAt string
+	UpdatedAt string
+}
+
 func OpenStore(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -63,6 +72,14 @@ func (s *Store) migrate() error {
 			updated_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_agents_client ON agents(client_id)`,
+		`CREATE TABLE IF NOT EXISTS clients (
+			client_id TEXT PRIMARY KEY,
+			token TEXT NOT NULL,
+			owner_name TEXT NOT NULL,
+			email TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS agent_invites (
 			code TEXT PRIMARY KEY,
 			handle TEXT NOT NULL UNIQUE,
@@ -95,6 +112,41 @@ func (s *Store) migrate() error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) CreateClient(ownerName string, email string) (ClientCredential, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for i := 0; i < 4; i++ {
+		clientID := protocol.NewID("client")
+		token := protocol.NewID("relay")
+		_, err := s.db.Exec(
+			`INSERT INTO clients(client_id, token, owner_name, email, created_at, updated_at)
+			 VALUES(?, ?, ?, ?, ?, ?)`,
+			clientID, token, ownerName, email, now, now,
+		)
+		if err == nil {
+			return ClientCredential{ClientID: clientID, Token: token, OwnerName: ownerName, Email: email, CreatedAt: now, UpdatedAt: now}, nil
+		}
+	}
+	return ClientCredential{}, errors.New("client_create_failed")
+}
+
+func (s *Store) ClientToken(clientID string) (string, error) {
+	var token string
+	err := s.db.QueryRow(`SELECT token FROM clients WHERE client_id = ?`, clientID).Scan(&token)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	return token, nil
+}
+
+func (s *Store) ClientCount() (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM clients`).Scan(&count)
+	return count, err
 }
 
 func (s *Store) UpsertAgent(clientID string, deviceID string, agent protocol.AgentProfile) error {
