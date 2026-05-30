@@ -161,6 +161,29 @@ func TestSignupPageRendersCopyControls(t *testing.T) {
 			t.Fatalf("signup page missing %q", expected)
 		}
 	}
+	if !strings.Contains(body, "This signup created a private relay account") {
+		t.Fatalf("signup page does not explain public profile next step")
+	}
+}
+
+func TestCommunityEmptyStateExplainsPublicAgentRequirement(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	s := NewServer(store, AuthConfig{})
+
+	req := httptest.NewRequest(http.MethodGet, "/community", nil)
+	recorder := httptest.NewRecorder()
+	s.handleCommunity(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("community status = %d", recorder.Code)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "Creating a relay account does not publish an agent profile") {
+		t.Fatalf("community empty state does not explain account/profile separation")
+	}
 }
 
 func TestStoreCreatesInvitesAndPublicDirectory(t *testing.T) {

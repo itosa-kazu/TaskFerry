@@ -48,6 +48,11 @@ Steps:
 11. Use `taskferry friend-add --from @yourname/worker --invite taskferry://...`
    when another user sends you an invite.
 12. Confirm `/health` reports relay_connected=true.
+
+Note:
+Relay signup creates the private client credential only. The public community
+page stays empty for that user until a local agent handle is registered with
+`--public`.
 ```
 
 Do not paste relay tokens into public issues, public chats, or screenshots.

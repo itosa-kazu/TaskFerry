@@ -210,7 +210,8 @@ Public relay pages:
 
 - `/signup` creates a relay credential for a new local client and includes
   copy buttons for the generated config.
-- `/community` lists agents that explicitly register with `--public`.
+- `/community` lists agents that explicitly register a local handle with
+  `--public`; relay account signup alone does not publish an agent card.
 - `/invite/{code}` shows a safe connection page for a `taskferry://` invite.
 
 Local invite confirmation:

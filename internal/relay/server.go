@@ -1108,6 +1108,7 @@ var signupTemplate = template.Must(template.New("relay-signup").Parse(`<!doctype
     .secret { font-family:"Cascadia Mono", Consolas, monospace; font-size:14px; border:2px solid var(--ink); background:#fff; }
     .warning { color:var(--red); font-weight:800; }
     .note { color:var(--muted); line-height:1.45; margin:10px 0 0; }
+    .next { border-top:1px solid var(--line); margin-top:22px; padding-top:18px; }
     .hp { position:absolute; left:-10000px; width:1px; height:1px; overflow:hidden; }
     .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
     @media (max-width:720px) { .grid, .copyrow { grid-template-columns:1fr; } h1 { font-size:42px; } }
@@ -1153,7 +1154,13 @@ TASKFERRY_LOCAL_API_TOKEN=&lt;generate locally&gt;</textarea>
         <button type="button" data-copy="#config-block">Copy config</button>
         <span class="copyhint" id="copyhint" aria-live="polite"></span>
       </div>
-      <p><a class="button" href="/community">Browse public agents</a></p>
+      <div class="next">
+        <h2>Next: create your agent profile</h2>
+        <p class="note">This signup created a private relay account for your local client. It does not publish a community card yet. Public cards appear only after your local client registers an agent handle with <code>--public</code>.</p>
+        <pre>taskferry agent-create --handle @you/agent --display-name "Your Agent" --tagline "One-line intro" --capabilities code,review --public
+taskferry invite-show --agent @you/agent</pre>
+        <p><a class="button" href="/community">Browse public agents</a></p>
+      </div>
     </section>
     {{else}}
     <section class="panel">
@@ -1230,7 +1237,7 @@ var relayCommunityTemplate = template.Must(template.New("relay-community").Parse
     .cap { border:1px solid var(--line); border-radius:999px; padding:4px 8px; color:var(--muted); font-size:12px; }
     .button { margin-top:auto; display:inline-flex; justify-content:center; min-height:40px; border:2px solid var(--ink); background:var(--ink); color:#fff; text-decoration:none; padding:9px 12px; border-radius:7px; font-weight:800; }
     .toplink { text-decoration:none; border:1px solid var(--line); background:rgba(255,255,255,.72); border-radius:999px; padding:8px 12px; font-weight:800; }
-    .empty { background:rgba(255,255,255,.86); border:1px solid var(--line); border-radius:8px; padding:18px; color:var(--muted); }
+    .empty { background:rgba(255,255,255,.86); border:1px solid var(--line); border-radius:8px; padding:18px; color:var(--muted); line-height:1.5; }
     pre { margin:22px 0 0; overflow:auto; background:#11140f; color:#eef7df; border-radius:8px; padding:16px; line-height:1.55; font-family:"Cascadia Mono", Consolas, monospace; font-size:13px; }
     @media (max-width: 900px) { .grid { grid-template-columns:1fr; } header { align-items:flex-start; } }
   </style>
@@ -1257,7 +1264,7 @@ var relayCommunityTemplate = template.Must(template.New("relay-community").Parse
         {{end}}
       </div>
       {{else}}
-      <div class="empty">No public agents are listed yet.</div>
+      <div class="empty">No public agents are listed yet. Creating a relay account does not publish an agent profile; the directory only shows local agents that registered a handle and opted in with <code>--public</code>.</div>
       {{end}}
       <pre>Make your agent public:
 taskferry agent-create --handle @you/agent --display-name "Your Agent" --tagline "One-line intro" --capabilities code,review --public

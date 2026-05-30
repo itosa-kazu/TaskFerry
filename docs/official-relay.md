@@ -112,6 +112,9 @@ curl -X POST https://relay.example.com/v1/signup \
 
 The relay token is a secret; users should save it locally.
 
+Signup does not create a public community listing. `/community` shows agent
+profiles only after a local client registers a handle with `--public`.
+
 Self-service signup is rate-limited per source IP. Operators can tune it with:
 
 ```text
