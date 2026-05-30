@@ -58,6 +58,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /", s.handleDashboard)
 	mux.HandleFunc("GET /agents", s.handleAgents)
 	mux.HandleFunc("POST /agents", s.handleCreateAgent)
+	mux.HandleFunc("GET /invites", s.handleInviteForAgent)
+	mux.HandleFunc("POST /friends/request", s.handleFriendRequest)
 	mux.HandleFunc("POST /connections/request", s.handleConnectionRequest)
 	mux.HandleFunc("POST /connections/accept", s.handleConnectionAccept)
 	mux.HandleFunc("POST /messages/send", s.handleSendMessage)
@@ -91,7 +93,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	if ownerID == "" {
 		ownerID = s.cfg.OwnerID
 	}
-	rec, err := s.store.CreateAgent(req.Handle, ownerID, s.cfg.DeviceID, req.DisplayName, req.Description, req.Capabilities)
+	rec, err := s.store.CreateAgent(req.Handle, ownerID, s.cfg.DeviceID, req.DisplayName, req.Description, req.Tagline, req.Capabilities, req.PublicProfile)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse(err.Error()))
 		return
@@ -117,6 +119,51 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		profiles = append(profiles, agent.Profile())
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"agents": profiles})
+}
+
+func (s *Server) handleInviteForAgent(w http.ResponseWriter, r *http.Request) {
+	handle := r.URL.Query().Get("agent")
+	if handle == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse("missing_agent"))
+		return
+	}
+	invite, err := s.fetchAgentInvite(handle)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, invite)
+}
+
+func (s *Server) handleFriendRequest(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		From    string `json:"from"`
+		Invite  string `json:"invite"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse("invalid_json"))
+		return
+	}
+	invite, err := s.resolveInvite(req.Invite)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse(err.Error()))
+		return
+	}
+	if invite.Agent == nil || invite.Agent.Handle == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse("invite_missing_agent"))
+		return
+	}
+	message := req.Message
+	if message == "" {
+		message = "Please connect for TaskFerry work."
+	}
+	id, err := s.sendTyped(req.From, []string{invite.Agent.Handle}, protocol.MessageTypeConnectionRequest, map[string]any{"message": message, "invite_code": invite.InviteCode}, "", "")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "to": invite.Agent.Handle, "invite_code": invite.InviteCode, "message_id": id})
 }
 
 func (s *Server) handleConnectionRequest(w http.ResponseWriter, r *http.Request) {
@@ -575,6 +622,106 @@ func (s *Server) resolveAgent(handle string) (protocol.AgentProfile, error) {
 		return protocol.AgentProfile{}, errors.New(out.Error)
 	}
 	return *out.Agent, nil
+}
+
+func (s *Server) fetchAgentInvite(handle string) (protocol.InviteResponse, error) {
+	u := strings.TrimRight(s.cfg.RelayHTTP, "/") + "/v1/agents/invite?handle=" + url.QueryEscape(handle)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return protocol.InviteResponse{}, err
+	}
+	req.Header.Set("X-TaskFerry-Client-ID", s.cfg.ClientID)
+	if s.cfg.RelayToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.cfg.RelayToken)
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return protocol.InviteResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return protocol.InviteResponse{}, fmt.Errorf("relay invite status %d", resp.StatusCode)
+	}
+	var out protocol.InviteResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return protocol.InviteResponse{}, err
+	}
+	if !out.OK {
+		return protocol.InviteResponse{}, errors.New(out.Error)
+	}
+	return out, nil
+}
+
+func (s *Server) resolveInvite(rawInvite string) (protocol.InviteResponse, error) {
+	endpoint, err := s.inviteResolveEndpoint(rawInvite)
+	if err != nil {
+		return protocol.InviteResponse{}, err
+	}
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return protocol.InviteResponse{}, err
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return protocol.InviteResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return protocol.InviteResponse{}, fmt.Errorf("relay invite status %d", resp.StatusCode)
+	}
+	var out protocol.InviteResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return protocol.InviteResponse{}, err
+	}
+	if !out.OK {
+		return protocol.InviteResponse{}, errors.New(out.Error)
+	}
+	return out, nil
+}
+
+func (s *Server) inviteResolveEndpoint(rawInvite string) (string, error) {
+	rawInvite = strings.TrimSpace(rawInvite)
+	if rawInvite == "" {
+		return "", errors.New("missing_invite")
+	}
+	if !strings.Contains(rawInvite, "://") {
+		return strings.TrimRight(s.cfg.RelayHTTP, "/") + "/v1/invites/" + url.PathEscape(rawInvite), nil
+	}
+	inviteURL, err := url.Parse(rawInvite)
+	if err != nil {
+		return "", err
+	}
+	var host string
+	var code string
+	switch inviteURL.Scheme {
+	case "taskferry":
+		host = inviteURL.Host
+		code = strings.TrimPrefix(inviteURL.EscapedPath(), "/invite/")
+	case "http", "https":
+		host = inviteURL.Host
+		if strings.HasPrefix(inviteURL.EscapedPath(), "/invite/") {
+			code = strings.TrimPrefix(inviteURL.EscapedPath(), "/invite/")
+		} else if strings.HasPrefix(inviteURL.EscapedPath(), "/v1/invites/") {
+			code = strings.TrimPrefix(inviteURL.EscapedPath(), "/v1/invites/")
+		}
+	default:
+		return "", errors.New("unsupported_invite_scheme")
+	}
+	if host == "" || code == "" {
+		return "", errors.New("invalid_invite_url")
+	}
+	relayURL, err := url.Parse(s.cfg.RelayHTTP)
+	if err != nil {
+		return "", err
+	}
+	if !strings.EqualFold(host, relayURL.Host) {
+		return "", fmt.Errorf("invite_relay_mismatch: configured %s but invite uses %s", relayURL.Host, host)
+	}
+	code, err = url.PathUnescape(code)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(s.cfg.RelayHTTP, "/") + "/v1/invites/" + url.PathEscape(code), nil
 }
 
 func (s *Server) setRelayConnected(value bool) {

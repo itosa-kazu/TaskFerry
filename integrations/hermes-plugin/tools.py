@@ -55,7 +55,30 @@ def taskferry_register_agent(args, **kwargs):
                 "handle": args.get("handle", ""),
                 "display_name": args.get("display_name", ""),
                 "description": args.get("description", ""),
+                "tagline": args.get("tagline", ""),
                 "capabilities": args.get("capabilities") or [],
+                "public_profile": args.get("public_profile", False),
+            },
+        )
+    )
+
+
+def taskferry_show_invite(args, **kwargs):
+    del kwargs
+    q = urllib.parse.urlencode({"agent": args.get("agent", "")})
+    return _dump(_request("GET", f"/invites?{q}"))
+
+
+def taskferry_add_friend(args, **kwargs):
+    del kwargs
+    return _dump(
+        _request(
+            "POST",
+            "/friends/request",
+            {
+                "from": args.get("from", ""),
+                "invite": args.get("invite", ""),
+                "message": args.get("message", ""),
             },
         )
     )

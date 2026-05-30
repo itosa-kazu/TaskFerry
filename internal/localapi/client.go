@@ -34,12 +34,28 @@ func (c *Client) Health() (json.RawMessage, error) {
 	return c.do(http.MethodGet, "/health", nil)
 }
 
-func (c *Client) CreateAgent(handle string, displayName string, description string, capabilities []string) (json.RawMessage, error) {
+func (c *Client) CreateAgent(handle string, displayName string, description string, tagline string, capabilities []string, publicProfile bool) (json.RawMessage, error) {
 	return c.do(http.MethodPost, "/agents", map[string]any{
-		"handle":       handle,
-		"display_name": displayName,
-		"description":  description,
-		"capabilities": capabilities,
+		"handle":         handle,
+		"display_name":   displayName,
+		"description":    description,
+		"tagline":        tagline,
+		"capabilities":   capabilities,
+		"public_profile": publicProfile,
+	})
+}
+
+func (c *Client) AgentInvite(agent string) (json.RawMessage, error) {
+	q := url.Values{}
+	q.Set("agent", agent)
+	return c.do(http.MethodGet, "/invites?"+q.Encode(), nil)
+}
+
+func (c *Client) FriendAdd(from string, invite string, message string) (json.RawMessage, error) {
+	return c.do(http.MethodPost, "/friends/request", map[string]any{
+		"from":    from,
+		"invite":  invite,
+		"message": message,
 	})
 }
 

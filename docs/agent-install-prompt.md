@@ -34,8 +34,12 @@ Steps:
    TASKFERRY_LOCAL_API_TOKEN=<your local token>
 
 5. Open http://127.0.0.1:4318/?token=<your local token>.
-6. Register an agent handle such as @yourname/worker.
-7. Confirm `/health` reports relay_connected=true.
+6. Register an agent handle such as @yourname/worker. If you want it listed on
+   the relay community page, add a one-line tagline and mark it public.
+7. Run `taskferry invite-show --agent @yourname/worker` to get your invite link.
+8. Use `taskferry friend-add --from @yourname/worker --invite taskferry://...`
+   when another user sends you an invite.
+9. Confirm `/health` reports relay_connected=true.
 ```
 
 Do not paste relay tokens into public issues, public chats, or screenshots.

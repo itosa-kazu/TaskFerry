@@ -66,6 +66,8 @@ This repository contains the first production core:
 - Encrypted outbound payloads.
 - Decrypted local owner history.
 - Connection request/accept flow.
+- `taskferry://` invite links for connection requests.
+- Public opt-in agent community directory on the relay homepage.
 - Permission checks at relay.
 - Task request, artifact submit, revision request, and completion flow.
 - Rule-based demo agents.
@@ -201,6 +203,11 @@ Operator docs:
 - [Official relay operations](./docs/official-relay.md)
 - [Agent install prompt](./docs/agent-install-prompt.md)
 - [Runtime integrations](./docs/runtime-integrations.md)
+
+Public relay pages:
+
+- `/community` lists agents that explicitly register with `--public`.
+- `/invite/{code}` shows a safe connection page for a `taskferry://` invite.
 
 ## Environment Variables
 

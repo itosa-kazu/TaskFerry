@@ -22,7 +22,9 @@ type AgentRecord struct {
 	DeviceID             string
 	DisplayName          string
 	Description          string
+	Tagline              string
 	Capabilities         []string
+	PublicProfile        bool
 	SigningPublicKey     string
 	SigningPrivateKey    string
 	EncryptionPublicKey  string
@@ -140,17 +142,52 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
+	if err := s.ensureColumn("agents", "tagline", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agents", "public_profile", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	return nil
 }
 
-func (s *Store) CreateAgent(handle string, ownerID string, deviceID string, displayName string, description string, capabilities []string) (AgentRecord, error) {
+func (s *Store) ensureColumn(table string, column string, spec string) error {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + spec)
+	return err
+}
+
+func (s *Store) CreateAgent(handle string, ownerID string, deviceID string, displayName string, description string, tagline string, capabilities []string, publicProfile bool) (AgentRecord, error) {
 	if err := protocol.ValidateHandle(handle); err != nil {
 		return AgentRecord{}, err
 	}
 	if existing, err := s.Agent(handle); err == nil {
 		existing.DisplayName = displayName
 		existing.Description = description
+		existing.Tagline = tagline
 		existing.Capabilities = capabilities
+		existing.PublicProfile = publicProfile
 		existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		if err := s.UpsertAgent(existing); err != nil {
 			return AgentRecord{}, err
@@ -173,7 +210,9 @@ func (s *Store) CreateAgent(handle string, ownerID string, deviceID string, disp
 		DeviceID:             deviceID,
 		DisplayName:          displayName,
 		Description:          description,
+		Tagline:              tagline,
 		Capabilities:         capabilities,
+		PublicProfile:        publicProfile,
 		SigningPublicKey:     signPub,
 		SigningPrivateKey:    signPriv,
 		EncryptionPublicKey:  encPub,
@@ -193,14 +232,16 @@ func (s *Store) UpsertAgent(rec AgentRecord) error {
 		return err
 	}
 	_, err = s.db.Exec(
-		`INSERT INTO agents(handle, agent_id, owner_id, device_id, display_name, description, capabilities_json, signing_public_key, signing_private_key, encryption_public_key, encryption_private_key, created_at, updated_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO agents(handle, agent_id, owner_id, device_id, display_name, description, tagline, capabilities_json, public_profile, signing_public_key, signing_private_key, encryption_public_key, encryption_private_key, created_at, updated_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(handle) DO UPDATE SET
-		 	display_name=excluded.display_name,
-		 	description=excluded.description,
-		 	capabilities_json=excluded.capabilities_json,
-		 	updated_at=excluded.updated_at`,
-		rec.Handle, rec.AgentID, rec.OwnerID, rec.DeviceID, rec.DisplayName, rec.Description, string(caps),
+		  display_name=excluded.display_name,
+		  description=excluded.description,
+		  tagline=excluded.tagline,
+		  capabilities_json=excluded.capabilities_json,
+		  public_profile=excluded.public_profile,
+		  updated_at=excluded.updated_at`,
+		rec.Handle, rec.AgentID, rec.OwnerID, rec.DeviceID, rec.DisplayName, rec.Description, rec.Tagline, string(caps), boolInt(rec.PublicProfile),
 		rec.SigningPublicKey, rec.SigningPrivateKey, rec.EncryptionPublicKey, rec.EncryptionPrivateKey,
 		rec.CreatedAt, time.Now().UTC().Format(time.RFC3339Nano),
 	)
@@ -210,11 +251,12 @@ func (s *Store) UpsertAgent(rec AgentRecord) error {
 func (s *Store) Agent(handle string) (AgentRecord, error) {
 	var rec AgentRecord
 	var caps string
+	var publicProfile int
 	err := s.db.QueryRow(
-		`SELECT agent_id, handle, owner_id, device_id, display_name, description, capabilities_json, signing_public_key, signing_private_key, encryption_public_key, encryption_private_key, created_at, updated_at
+		`SELECT agent_id, handle, owner_id, device_id, display_name, description, tagline, capabilities_json, public_profile, signing_public_key, signing_private_key, encryption_public_key, encryption_private_key, created_at, updated_at
 		 FROM agents WHERE handle = ?`,
 		handle,
-	).Scan(&rec.AgentID, &rec.Handle, &rec.OwnerID, &rec.DeviceID, &rec.DisplayName, &rec.Description, &caps,
+	).Scan(&rec.AgentID, &rec.Handle, &rec.OwnerID, &rec.DeviceID, &rec.DisplayName, &rec.Description, &rec.Tagline, &caps, &publicProfile,
 		&rec.SigningPublicKey, &rec.SigningPrivateKey, &rec.EncryptionPublicKey, &rec.EncryptionPrivateKey, &rec.CreatedAt, &rec.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -225,6 +267,7 @@ func (s *Store) Agent(handle string) (AgentRecord, error) {
 	if err := json.Unmarshal([]byte(caps), &rec.Capabilities); err != nil {
 		return AgentRecord{}, err
 	}
+	rec.PublicProfile = publicProfile != 0
 	return rec, nil
 }
 
@@ -257,12 +300,21 @@ func (a AgentRecord) Profile() protocol.AgentProfile {
 		DeviceID:            a.DeviceID,
 		DisplayName:         a.DisplayName,
 		Description:         a.Description,
+		Tagline:             a.Tagline,
 		Capabilities:        a.Capabilities,
+		PublicProfile:       a.PublicProfile,
 		SigningPublicKey:    a.SigningPublicKey,
 		EncryptionPublicKey: a.EncryptionPublicKey,
 		CreatedAt:           a.CreatedAt,
 		UpdatedAt:           a.UpdatedAt,
 	}
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func (s *Store) SaveMessage(env protocol.Envelope, direction string, plaintext []byte, delivery protocol.DeliveryState, processing protocol.ProcessingState) error {

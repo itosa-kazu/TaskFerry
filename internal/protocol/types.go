@@ -82,11 +82,26 @@ type AgentProfile struct {
 	DeviceID            string   `json:"device_id"`
 	DisplayName         string   `json:"display_name"`
 	Description         string   `json:"description"`
+	Tagline             string   `json:"tagline,omitempty"`
 	Capabilities        []string `json:"capabilities"`
+	PublicProfile       bool     `json:"public_profile,omitempty"`
 	SigningPublicKey    string   `json:"signing_public_key"`
 	EncryptionPublicKey string   `json:"encryption_public_key"`
 	CreatedAt           string   `json:"created_at,omitempty"`
 	UpdatedAt           string   `json:"updated_at,omitempty"`
+}
+
+type DirectoryAgent struct {
+	Handle        string   `json:"handle"`
+	DisplayName   string   `json:"display_name"`
+	Tagline       string   `json:"tagline"`
+	Description   string   `json:"description,omitempty"`
+	Capabilities  []string `json:"capabilities,omitempty"`
+	InviteCode    string   `json:"invite_code"`
+	InviteURL     string   `json:"invite_url"`
+	WebInviteURL  string   `json:"web_invite_url"`
+	PublicProfile bool     `json:"public_profile"`
+	UpdatedAt     string   `json:"updated_at,omitempty"`
 }
 
 type EncryptedPayload struct {
@@ -131,6 +146,23 @@ type ResolveAgentResponse struct {
 	Agent *AgentProfile `json:"agent,omitempty"`
 }
 
+type DirectoryResponse struct {
+	OK     bool             `json:"ok"`
+	Error  string           `json:"error,omitempty"`
+	Agents []DirectoryAgent `json:"agents,omitempty"`
+}
+
+type InviteResponse struct {
+	OK           bool            `json:"ok"`
+	Error        string          `json:"error,omitempty"`
+	InviteCode   string          `json:"invite_code,omitempty"`
+	InviteURL    string          `json:"invite_url,omitempty"`
+	WebInviteURL string          `json:"web_invite_url,omitempty"`
+	RelayHTTP    string          `json:"relay_http,omitempty"`
+	RelayWS      string          `json:"relay_ws,omitempty"`
+	Agent        *DirectoryAgent `json:"agent,omitempty"`
+}
+
 type RelayFrame struct {
 	Kind      string    `json:"kind"`
 	Envelope  *Envelope `json:"envelope,omitempty"`
@@ -146,11 +178,13 @@ type SendMessageRequest struct {
 }
 
 type CreateAgentRequest struct {
-	Handle       string   `json:"handle"`
-	DisplayName  string   `json:"display_name"`
-	Description  string   `json:"description"`
-	Capabilities []string `json:"capabilities"`
-	OwnerID      string   `json:"owner_id,omitempty"`
+	Handle        string   `json:"handle"`
+	DisplayName   string   `json:"display_name"`
+	Description   string   `json:"description"`
+	Tagline       string   `json:"tagline,omitempty"`
+	Capabilities  []string `json:"capabilities"`
+	PublicProfile bool     `json:"public_profile,omitempty"`
+	OwnerID       string   `json:"owner_id,omitempty"`
 }
 
 type TaskRequestPayload struct {

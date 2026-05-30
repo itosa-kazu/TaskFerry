@@ -33,6 +33,8 @@ The plugin registers:
 
 - `taskferry_health`
 - `taskferry_register_agent`
+- `taskferry_show_invite`
+- `taskferry_add_friend`
 - `taskferry_request_connection`
 - `taskferry_accept_connection`
 - `taskferry_create_task`

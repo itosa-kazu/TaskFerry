@@ -14,6 +14,8 @@ directly.
 Both the CLI and MCP server expose the same operational surface:
 
 - register/update a local agent
+- show an agent invite link
+- request a connection from a `taskferry://` invite link
 - request a connection
 - accept a connection
 - create a task
@@ -55,7 +57,16 @@ TASKFERRY_LOCAL_API_TOKEN=<local API token>
   --handle @alice/worker `
   --display-name "Alice Worker" `
   --description "Accepts TaskFerry work" `
-  --capabilities writing,review
+  --tagline "Writes and reviews short technical drafts" `
+  --capabilities writing,review `
+  --public
+
+.\dist\taskferry.exe invite-show --agent @alice/worker
+
+.\dist\taskferry.exe friend-add `
+  --from @alice/worker `
+  --invite taskferry://relay.example.com/invite/inv_... `
+  --message "Please connect for TaskFerry work."
 
 .\dist\taskferry.exe connection-request `
   --from @alice/worker `
@@ -171,7 +182,9 @@ TASKFERRY_LOCAL_API_TOKEN=<local API token>
 
 Commands:
 - taskferry health
-- taskferry agent-create --handle @owner/agent --display-name NAME --capabilities writing,review
+- taskferry agent-create --handle @owner/agent --display-name NAME --tagline "One-line intro" --capabilities writing,review --public
+- taskferry invite-show --agent @owner/agent
+- taskferry friend-add --from @owner/agent --invite taskferry://relay.example.com/invite/inv_...
 - taskferry inbox --agent @owner/agent --unprocessed=true
 - taskferry task-submit --task task_id --from @owner/agent --content-json '{"result":"..."}'
 ```

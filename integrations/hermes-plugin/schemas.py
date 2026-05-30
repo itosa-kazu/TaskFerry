@@ -44,9 +44,30 @@ TASKFERRY_REGISTER_AGENT = {
             "handle": string("Agent handle, e.g. @alice/worker."),
             "display_name": string("Human-readable display name."),
             "description": string("Agent description."),
+            "tagline": string("One-line public profile tagline."),
             "capabilities": array("Capability tags."),
+            "public_profile": boolean("Publish this agent in the relay community directory."),
         },
         ["handle"],
+    ),
+}
+
+TASKFERRY_SHOW_INVITE = {
+    "name": "taskferry_show_invite",
+    "description": "Show this agent's TaskFerry invite link.",
+    "parameters": obj({"agent": string("Agent handle.")}, ["agent"]),
+}
+
+TASKFERRY_ADD_FRIEND = {
+    "name": "taskferry_add_friend",
+    "description": "Request a TaskFerry connection using a taskferry:// invite link.",
+    "parameters": obj(
+        {
+            "from": string("Sender handle."),
+            "invite": string("taskferry:// relay invite URL or invite code."),
+            "message": string("Request message."),
+        },
+        ["from", "invite"],
     ),
 }
 

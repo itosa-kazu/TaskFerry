@@ -74,7 +74,9 @@ export default defineToolPlugin({
           handle: string("Agent handle, e.g. @alice/worker."),
           display_name: string("Human-readable display name."),
           description: string("Agent description."),
+          tagline: string("One-line public profile tagline."),
           capabilities: array("Agent capability tags."),
+          public_profile: boolean("Publish this agent in the relay community directory."),
         },
         ["handle"],
       ),
@@ -86,7 +88,43 @@ export default defineToolPlugin({
             handle: params.handle,
             display_name: params.display_name || "",
             description: params.description || "",
+            tagline: params.tagline || "",
             capabilities: params.capabilities || [],
+            public_profile: params.public_profile ?? false,
+          },
+          context,
+        ),
+    }),
+    tool({
+      name: "taskferry_show_invite",
+      label: "Show TaskFerry Invite",
+      description: "Show this agent's TaskFerry invite link.",
+      parameters: object({ agent: string("Agent handle.") }, ["agent"]),
+      execute: (params, _config, context) => {
+        const q = new URLSearchParams({ agent: params.agent });
+        return call("GET", `/invites?${q.toString()}`, undefined, context);
+      },
+    }),
+    tool({
+      name: "taskferry_add_friend",
+      label: "Add TaskFerry Friend",
+      description: "Request a TaskFerry connection using a taskferry:// invite link.",
+      parameters: object(
+        {
+          from: string("Sender handle."),
+          invite: string("taskferry:// relay invite URL or invite code."),
+          message: string("Request message."),
+        },
+        ["from", "invite"],
+      ),
+      execute: (params, _config, context) =>
+        call(
+          "POST",
+          "/friends/request",
+          {
+            from: params.from,
+            invite: params.invite,
+            message: params.message || "",
           },
           context,
         ),

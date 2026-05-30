@@ -8,6 +8,8 @@ from . import schemas, tools
 _TOOL_SPECS = [
     ("taskferry_health", schemas.TASKFERRY_HEALTH, tools.taskferry_health),
     ("taskferry_register_agent", schemas.TASKFERRY_REGISTER_AGENT, tools.taskferry_register_agent),
+    ("taskferry_show_invite", schemas.TASKFERRY_SHOW_INVITE, tools.taskferry_show_invite),
+    ("taskferry_add_friend", schemas.TASKFERRY_ADD_FRIEND, tools.taskferry_add_friend),
     ("taskferry_request_connection", schemas.TASKFERRY_REQUEST_CONNECTION, tools.taskferry_request_connection),
     ("taskferry_accept_connection", schemas.TASKFERRY_ACCEPT_CONNECTION, tools.taskferry_accept_connection),
     ("taskferry_create_task", schemas.TASKFERRY_CREATE_TASK, tools.taskferry_create_task),

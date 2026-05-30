@@ -112,7 +112,11 @@ func (s *mcpServer) runTool(name string, args map[string]any) (json.RawMessage, 
 	case "taskferry_health":
 		return s.client.Health()
 	case "taskferry_register_agent":
-		return s.client.CreateAgent(str(args, "handle"), str(args, "display_name"), str(args, "description"), strList(args, "capabilities"))
+		return s.client.CreateAgent(str(args, "handle"), str(args, "display_name"), str(args, "description"), str(args, "tagline"), strList(args, "capabilities"), boolValue(args, "public_profile", false))
+	case "taskferry_show_invite":
+		return s.client.AgentInvite(str(args, "agent"))
+	case "taskferry_add_friend":
+		return s.client.FriendAdd(str(args, "from"), str(args, "invite"), str(args, "message"))
 	case "taskferry_request_connection":
 		return s.client.RequestConnection(str(args, "from"), str(args, "to"), str(args, "message"))
 	case "taskferry_accept_connection":
@@ -154,7 +158,9 @@ func (s *mcpServer) write(resp response) {
 func tools() []tool {
 	return []tool{
 		{Name: "taskferry_health", Description: "Check the local TaskFerry client health.", InputSchema: object(nil, nil)},
-		{Name: "taskferry_register_agent", Description: "Register or update a local TaskFerry agent.", InputSchema: object(map[string]any{"handle": strSchema(), "display_name": strSchema(), "description": strSchema(), "capabilities": arraySchema()}, []string{"handle"})},
+		{Name: "taskferry_register_agent", Description: "Register or update a local TaskFerry agent.", InputSchema: object(map[string]any{"handle": strSchema(), "display_name": strSchema(), "description": strSchema(), "tagline": strSchema(), "capabilities": arraySchema(), "public_profile": boolSchema()}, []string{"handle"})},
+		{Name: "taskferry_show_invite", Description: "Show this agent's TaskFerry invite link.", InputSchema: object(map[string]any{"agent": strSchema()}, []string{"agent"})},
+		{Name: "taskferry_add_friend", Description: "Request a TaskFerry connection using a taskferry:// invite link.", InputSchema: object(map[string]any{"from": strSchema(), "invite": strSchema(), "message": strSchema()}, []string{"from", "invite"})},
 		{Name: "taskferry_request_connection", Description: "Request approval to communicate with another agent.", InputSchema: object(map[string]any{"from": strSchema(), "to": strSchema(), "message": strSchema()}, []string{"from", "to"})},
 		{Name: "taskferry_accept_connection", Description: "Accept a connection request from another agent.", InputSchema: object(map[string]any{"from": strSchema(), "to": strSchema()}, []string{"from", "to"})},
 		{Name: "taskferry_create_task", Description: "Create a typed TaskFerry task for another agent.", InputSchema: object(map[string]any{"from": strSchema(), "to": strSchema(), "title": strSchema(), "description": strSchema(), "requirements": arraySchema(), "max_revisions": intSchema(), "expected_format": strSchema()}, []string{"from", "to", "title", "description"})},

@@ -37,6 +37,8 @@ dispatch:
 	commands := map[string]commandFunc{
 		"health":             cmdHealth,
 		"agent-create":       cmdAgentCreate,
+		"invite-show":        cmdInviteShow,
+		"friend-add":         cmdFriendAdd,
 		"connection-request": cmdConnectionRequest,
 		"connection-accept":  cmdConnectionAccept,
 		"task-create":        cmdTaskCreate,
@@ -73,11 +75,33 @@ func cmdAgentCreate(c *localapi.Client, args []string) (json.RawMessage, error) 
 	handle := fs.String("handle", "", "agent handle, e.g. @alice/worker")
 	displayName := fs.String("display-name", "", "display name")
 	description := fs.String("description", "", "description")
+	tagline := fs.String("tagline", "", "one-line public profile tagline")
 	capabilities := fs.String("capabilities", "", "comma-separated capabilities")
+	publicProfile := fs.Bool("public", false, "publish this agent in the relay community directory")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
-	return c.CreateAgent(*handle, *displayName, *description, localapi.ParseList(*capabilities))
+	return c.CreateAgent(*handle, *displayName, *description, *tagline, localapi.ParseList(*capabilities), *publicProfile)
+}
+
+func cmdInviteShow(c *localapi.Client, args []string) (json.RawMessage, error) {
+	fs := flag.NewFlagSet("invite-show", flag.ContinueOnError)
+	agent := fs.String("agent", "", "agent handle")
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	return c.AgentInvite(*agent)
+}
+
+func cmdFriendAdd(c *localapi.Client, args []string) (json.RawMessage, error) {
+	fs := flag.NewFlagSet("friend-add", flag.ContinueOnError)
+	from := fs.String("from", "", "sender handle")
+	invite := fs.String("invite", "", "taskferry:// relay invite URL or invite code")
+	message := fs.String("message", "", "request message")
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	return c.FriendAdd(*from, *invite, *message)
 }
 
 func cmdConnectionRequest(c *localapi.Client, args []string) (json.RawMessage, error) {
@@ -252,7 +276,9 @@ Global flags:
 
 Commands:
   health
-  agent-create --handle @owner/agent --display-name NAME --description TEXT --capabilities a,b
+  agent-create --handle @owner/agent --display-name NAME --description TEXT --tagline TEXT --capabilities a,b --public
+  invite-show --agent @owner/agent
+  friend-add --from @owner/agent --invite taskferry://relay.example.com/invite/inv_x --message TEXT
   connection-request --from @a/agent --to @b/agent --message TEXT
   connection-accept --from @b/agent --to @a/agent
   task-create --from @a/agent --to @b/agent --title TITLE --description TEXT --requirements a,b --max-revisions 3

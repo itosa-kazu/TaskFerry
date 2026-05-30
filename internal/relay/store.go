@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/itosa-kazu/TaskFerry/internal/protocol"
@@ -19,6 +20,13 @@ type QueuedMessage struct {
 	MessageID string
 	Recipient string
 	Envelope  protocol.Envelope
+}
+
+type AgentInvite struct {
+	Code      string
+	Handle    string
+	CreatedAt string
+	UpdatedAt string
 }
 
 func OpenStore(path string) (*Store, error) {
@@ -55,6 +63,12 @@ func (s *Store) migrate() error {
 			updated_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_agents_client ON agents(client_id)`,
+		`CREATE TABLE IF NOT EXISTS agent_invites (
+			code TEXT PRIMARY KEY,
+			handle TEXT NOT NULL UNIQUE,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS connections (
 			from_handle TEXT NOT NULL,
 			to_handle TEXT NOT NULL,
@@ -104,6 +118,10 @@ func (s *Store) UpsertAgent(clientID string, deviceID string, agent protocol.Age
 		agent.Handle, agent.AgentID, agent.OwnerID, deviceID, clientID, string(profileJSON),
 		agent.SigningPublicKey, agent.EncryptionPublicKey, now, now,
 	)
+	if err != nil {
+		return err
+	}
+	_, err = s.EnsureInvite(agent.Handle)
 	return err
 }
 
@@ -143,6 +161,124 @@ func (s *Store) ClientAgents(clientID string) ([]protocol.AgentProfile, error) {
 		out = append(out, profile)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) EnsureInvite(handle string) (AgentInvite, error) {
+	if invite, err := s.InviteByHandle(handle); err == nil {
+		return invite, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return AgentInvite{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for i := 0; i < 4; i++ {
+		code := protocol.NewID("inv")
+		_, err := s.db.Exec(
+			`INSERT INTO agent_invites(code, handle, created_at, updated_at) VALUES(?, ?, ?, ?)`,
+			code, handle, now, now,
+		)
+		if err == nil {
+			return AgentInvite{Code: code, Handle: handle, CreatedAt: now, UpdatedAt: now}, nil
+		}
+	}
+	return AgentInvite{}, errors.New("invite_create_failed")
+}
+
+func (s *Store) InviteByHandle(handle string) (AgentInvite, error) {
+	var invite AgentInvite
+	err := s.db.QueryRow(
+		`SELECT code, handle, created_at, updated_at FROM agent_invites WHERE handle = ?`,
+		handle,
+	).Scan(&invite.Code, &invite.Handle, &invite.CreatedAt, &invite.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AgentInvite{}, ErrNotFound
+		}
+		return AgentInvite{}, err
+	}
+	return invite, nil
+}
+
+func (s *Store) Invite(code string) (AgentInvite, error) {
+	var invite AgentInvite
+	err := s.db.QueryRow(
+		`SELECT code, handle, created_at, updated_at FROM agent_invites WHERE code = ?`,
+		code,
+	).Scan(&invite.Code, &invite.Handle, &invite.CreatedAt, &invite.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AgentInvite{}, ErrNotFound
+		}
+		return AgentInvite{}, err
+	}
+	return invite, nil
+}
+
+func (s *Store) PublicAgents(limit int, relayHTTP string) ([]protocol.DirectoryAgent, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	rows, err := s.db.Query(`SELECT profile_json FROM agents ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	var profiles []protocol.AgentProfile
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		var profile protocol.AgentProfile
+		if err := json.Unmarshal([]byte(raw), &profile); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		if !profile.PublicProfile {
+			continue
+		}
+		profiles = append(profiles, profile)
+		if len(profiles) >= limit {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	var out []protocol.DirectoryAgent
+	for _, profile := range profiles {
+		invite, err := s.EnsureInvite(profile.Handle)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, DirectoryAgent(profile, invite.Code, relayHTTP))
+	}
+	return out, nil
+}
+
+func DirectoryAgent(profile protocol.AgentProfile, inviteCode string, relayHTTP string) protocol.DirectoryAgent {
+	relayHTTP = strings.TrimRight(relayHTTP, "/")
+	host := strings.TrimPrefix(strings.TrimPrefix(relayHTTP, "https://"), "http://")
+	tagline := profile.Tagline
+	if tagline == "" {
+		tagline = profile.Description
+	}
+	return protocol.DirectoryAgent{
+		Handle:        profile.Handle,
+		DisplayName:   profile.DisplayName,
+		Tagline:       tagline,
+		Description:   profile.Description,
+		Capabilities:  profile.Capabilities,
+		InviteCode:    inviteCode,
+		InviteURL:     "taskferry://" + host + "/invite/" + inviteCode,
+		WebInviteURL:  relayHTTP + "/invite/" + inviteCode,
+		PublicProfile: profile.PublicProfile,
+		UpdatedAt:     profile.UpdatedAt,
+	}
 }
 
 func (s *Store) ApproveConnection(a string, b string, permissions protocol.PermissionSet) error {

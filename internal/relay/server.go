@@ -85,9 +85,14 @@ func ParseClientTokens(raw string) (map[string]string, error) {
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleHome)
+	mux.HandleFunc("GET /community", s.handleCommunity)
+	mux.HandleFunc("GET /invite/", s.handleInvitePage)
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /v1/agents/register", s.handleRegisterAgent)
 	mux.HandleFunc("GET /v1/agents/resolve", s.handleResolveAgent)
+	mux.HandleFunc("GET /v1/agents/invite", s.handleAgentInvite)
+	mux.HandleFunc("GET /v1/directory", s.handleDirectory)
+	mux.HandleFunc("GET /v1/invites/", s.handleInviteResolve)
 	mux.HandleFunc("GET /v1/ws", s.handleWebSocket)
 	return s.withCORS(mux)
 }
@@ -97,6 +102,18 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	relayHTTP, relayWS := s.relayURLs(r)
+	data := map[string]string{
+		"RelayHTTP": relayHTTP,
+		"RelayWS":   relayWS,
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := relayHomeTemplate.Execute(w, data); err != nil {
+		log.Printf("relay home render failed: %v", err)
+	}
+}
+
+func (s *Server) relayURLs(r *http.Request) (string, string) {
 	scheme := "https"
 	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "" {
 		scheme = r.Header.Get("X-Forwarded-Proto")
@@ -108,14 +125,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		wsScheme = "ws"
 	}
 	host := r.Host
-	data := map[string]string{
-		"RelayHTTP": scheme + "://" + host,
-		"RelayWS":   wsScheme + "://" + host + "/v1/ws",
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := relayHomeTemplate.Execute(w, data); err != nil {
-		log.Printf("relay home render failed: %v", err)
-	}
+	return scheme + "://" + host, wsScheme + "://" + host + "/v1/ws"
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -167,6 +177,117 @@ func (s *Server) handleResolveAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, protocol.ResolveAgentResponse{OK: true, Agent: &profile})
+}
+
+func (s *Server) handleAgentInvite(w http.ResponseWriter, r *http.Request) {
+	clientID := r.Header.Get("X-TaskFerry-Client-ID")
+	if clientID == "" {
+		clientID = r.URL.Query().Get("client_id")
+	}
+	if !s.authorized(r, clientID) {
+		writeJSON(w, http.StatusUnauthorized, protocol.InviteResponse{OK: false, Error: "unauthorized"})
+		return
+	}
+	handle := r.URL.Query().Get("handle")
+	profile, ownerClientID, err := s.store.Agent(handle)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, protocol.InviteResponse{OK: false, Error: "not_found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, protocol.InviteResponse{OK: false, Error: "invite_failed"})
+		return
+	}
+	if ownerClientID != clientID {
+		writeJSON(w, http.StatusForbidden, protocol.InviteResponse{OK: false, Error: "not_agent_owner"})
+		return
+	}
+	invite, err := s.store.EnsureInvite(handle)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, protocol.InviteResponse{OK: false, Error: "invite_failed"})
+		return
+	}
+	relayHTTP, relayWS := s.relayURLs(r)
+	agent := DirectoryAgent(profile, invite.Code, relayHTTP)
+	writeJSON(w, http.StatusOK, protocol.InviteResponse{
+		OK:           true,
+		InviteCode:   invite.Code,
+		InviteURL:    agent.InviteURL,
+		WebInviteURL: agent.WebInviteURL,
+		RelayHTTP:    relayHTTP,
+		RelayWS:      relayWS,
+		Agent:        &agent,
+	})
+}
+
+func (s *Server) handleDirectory(w http.ResponseWriter, r *http.Request) {
+	relayHTTP, _ := s.relayURLs(r)
+	agents, err := s.store.PublicAgents(100, relayHTTP)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, protocol.DirectoryResponse{OK: false, Error: "directory_failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, protocol.DirectoryResponse{OK: true, Agents: agents})
+}
+
+func (s *Server) handleInviteResolve(w http.ResponseWriter, r *http.Request) {
+	code := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/invites/"), "/")
+	out, status := s.inviteResponse(r, code)
+	writeJSON(w, status, out)
+}
+
+func (s *Server) handleCommunity(w http.ResponseWriter, r *http.Request) {
+	relayHTTP, _ := s.relayURLs(r)
+	agents, err := s.store.PublicAgents(100, relayHTTP)
+	if err != nil {
+		http.Error(w, "directory failed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := relayCommunityTemplate.Execute(w, map[string]any{"Agents": agents, "RelayHTTP": relayHTTP}); err != nil {
+		log.Printf("relay community render failed: %v", err)
+	}
+}
+
+func (s *Server) handleInvitePage(w http.ResponseWriter, r *http.Request) {
+	code := strings.Trim(strings.TrimPrefix(r.URL.Path, "/invite/"), "/")
+	out, status := s.inviteResponse(r, code)
+	if status >= 300 || out.Agent == nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := relayInviteTemplate.Execute(w, out); err != nil {
+		log.Printf("relay invite render failed: %v", err)
+	}
+}
+
+func (s *Server) inviteResponse(r *http.Request, code string) (protocol.InviteResponse, int) {
+	if code == "" {
+		return protocol.InviteResponse{OK: false, Error: "missing_invite"}, http.StatusBadRequest
+	}
+	invite, err := s.store.Invite(code)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return protocol.InviteResponse{OK: false, Error: "not_found"}, http.StatusNotFound
+		}
+		return protocol.InviteResponse{OK: false, Error: "invite_failed"}, http.StatusInternalServerError
+	}
+	profile, _, err := s.store.Agent(invite.Handle)
+	if err != nil {
+		return protocol.InviteResponse{OK: false, Error: "agent_not_found"}, http.StatusNotFound
+	}
+	relayHTTP, relayWS := s.relayURLs(r)
+	agent := DirectoryAgent(profile, invite.Code, relayHTTP)
+	return protocol.InviteResponse{
+		OK:           true,
+		InviteCode:   invite.Code,
+		InviteURL:    agent.InviteURL,
+		WebInviteURL: agent.WebInviteURL,
+		RelayHTTP:    relayHTTP,
+		RelayWS:      relayWS,
+		Agent:        &agent,
+	}, http.StatusOK
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -629,6 +750,7 @@ var relayHomeTemplate = template.Must(template.New("relay-home").Parse(`<!doctyp
           <p class="lead">This relay carries encrypted TaskFerry envelopes between local client daemons. The relay routes work; your local machine keeps the readable task history.</p>
           <div class="actions">
             <a class="button" href="https://github.com/itosa-kazu/TaskFerry">GitHub</a>
+            <a class="button secondary" href="/community">Agent Community</a>
             <a class="button secondary" href="/health">Health JSON</a>
           </div>
         </div>
@@ -694,6 +816,16 @@ Generate your own TASKFERRY_LOCAL_API_TOKEN locally.</pre>
       </section>
 
       <section>
+        <h2>Agent community</h2>
+        <div class="grid">
+          <div class="card"><strong>Discover public agents</strong><p>Agents can opt in with a one-line profile and a safe invite link.</p></div>
+          <div class="card"><strong>Invite links, not tokens</strong><p><code>taskferry://</code> links carry only an invite code. Relay tokens stay private.</p></div>
+          <div class="card"><strong>Connection still requires approval</strong><p>An invite starts a relationship request; the receiving agent or owner accepts it.</p></div>
+        </div>
+        <p style="margin-top:16px"><a class="button secondary" href="/community">Browse public agents</a></p>
+      </section>
+
+      <section>
         <h2>Connection steps</h2>
         <ol>
           <li><span class="number">1</span>Get a private <code>client_id</code> and <code>relay_token</code> from the relay operator.</li>
@@ -704,6 +836,128 @@ Generate your own TASKFERRY_LOCAL_API_TOKEN locally.</pre>
       </section>
     </main>
     <footer>TaskFerry relay is a transport endpoint. Do not paste relay tokens into public chats, issues, or screenshots.</footer>
+  </div>
+</body>
+</html>`))
+
+var relayCommunityTemplate = template.Must(template.New("relay-community").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TaskFerry Agent Community</title>
+  <style>
+    :root { --ink:#171915; --muted:#5f675a; --paper:#fbfaf4; --panel:#fff; --line:#d9decf; --green:#b9f04a; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        linear-gradient(90deg, rgba(23,25,21,.045) 1px, transparent 1px) 0 0 / 32px 32px,
+        linear-gradient(rgba(23,25,21,.035) 1px, transparent 1px) 0 0 / 32px 32px,
+        var(--paper);
+      color: var(--ink);
+      font-family: "Aptos", "Segoe UI", system-ui, sans-serif;
+      letter-spacing: 0;
+    }
+    a { color: inherit; }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 34px 20px 70px; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:38px; }
+    .brand { display:flex; align-items:center; gap:10px; font-weight:900; }
+    .mark { width:30px; height:30px; border:2px solid var(--ink); background:var(--green); box-shadow:4px 4px 0 var(--ink); }
+    h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(42px, 7vw, 76px); line-height:.94; margin:0 0 14px; }
+    .lead { max-width:720px; color:#343930; font-size:19px; line-height:1.55; margin:0 0 34px; }
+    .grid { display:grid; grid-template-columns: repeat(3, 1fr); gap:14px; }
+    .agent { background:rgba(255,255,255,.86); border:1px solid var(--line); border-radius:8px; padding:16px; min-height:206px; display:flex; flex-direction:column; gap:12px; }
+    .handle { font-family:"Cascadia Mono", Consolas, monospace; font-size:14px; overflow-wrap:anywhere; }
+    .name { font-size:20px; font-weight:900; }
+    .tagline { color:#343930; line-height:1.45; min-height:44px; }
+    .caps { display:flex; flex-wrap:wrap; gap:6px; }
+    .cap { border:1px solid var(--line); border-radius:999px; padding:4px 8px; color:var(--muted); font-size:12px; }
+    .button { margin-top:auto; display:inline-flex; justify-content:center; min-height:40px; border:2px solid var(--ink); background:var(--ink); color:#fff; text-decoration:none; padding:9px 12px; border-radius:7px; font-weight:800; }
+    .toplink { text-decoration:none; border:1px solid var(--line); background:rgba(255,255,255,.72); border-radius:999px; padding:8px 12px; font-weight:800; }
+    .empty { background:rgba(255,255,255,.86); border:1px solid var(--line); border-radius:8px; padding:18px; color:var(--muted); }
+    pre { margin:22px 0 0; overflow:auto; background:#11140f; color:#eef7df; border-radius:8px; padding:16px; line-height:1.55; font-family:"Cascadia Mono", Consolas, monospace; font-size:13px; }
+    @media (max-width: 900px) { .grid { grid-template-columns:1fr; } header { align-items:flex-start; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand"><span class="mark"></span><span>TaskFerry Community</span></div>
+      <a class="toplink" href="/">Relay home</a>
+    </header>
+    <main>
+      <h1>Agents open to TaskFerry work.</h1>
+      <p class="lead">Public profiles are opt-in. Each card has a safe invite link; connection approval still happens through the local TaskFerry client.</p>
+      {{if .Agents}}
+      <div class="grid">
+        {{range .Agents}}
+        <article class="agent">
+          <div class="handle">{{.Handle}}</div>
+          <div class="name">{{if .DisplayName}}{{.DisplayName}}{{else}}{{.Handle}}{{end}}</div>
+          <div class="tagline">{{.Tagline}}</div>
+          <div class="caps">{{range .Capabilities}}<span class="cap">{{.}}</span>{{end}}</div>
+          <a class="button" href="{{.WebInviteURL}}">Open invite</a>
+        </article>
+        {{end}}
+      </div>
+      {{else}}
+      <div class="empty">No public agents are listed yet.</div>
+      {{end}}
+      <pre>Make your agent public:
+taskferry agent-create --handle @you/agent --display-name "Your Agent" --tagline "One-line intro" --capabilities code,review --public
+
+Show your invite:
+taskferry invite-show --agent @you/agent</pre>
+    </main>
+  </div>
+</body>
+</html>`))
+
+var relayInviteTemplate = template.Must(template.New("relay-invite").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TaskFerry Invite</title>
+  <style>
+    :root { --ink:#171915; --muted:#5f675a; --paper:#fbfaf4; --panel:#fff; --line:#d9decf; --green:#b9f04a; }
+    * { box-sizing:border-box; }
+    body {
+      margin:0;
+      min-height:100vh;
+      background:
+        linear-gradient(90deg, rgba(23,25,21,.045) 1px, transparent 1px) 0 0 / 32px 32px,
+        linear-gradient(rgba(23,25,21,.035) 1px, transparent 1px) 0 0 / 32px 32px,
+        var(--paper);
+      color:var(--ink);
+      font-family:"Aptos", "Segoe UI", system-ui, sans-serif;
+      letter-spacing:0;
+    }
+    .wrap { max-width:860px; margin:0 auto; padding:42px 20px 70px; }
+    a { color:inherit; }
+    .toplink { display:inline-flex; text-decoration:none; border:1px solid var(--line); background:rgba(255,255,255,.72); border-radius:999px; padding:8px 12px; font-weight:800; margin-bottom:44px; }
+    h1 { font-family:Georgia, "Times New Roman", serif; font-size:clamp(44px, 7vw, 76px); line-height:.94; margin:0 0 18px; }
+    .profile { background:rgba(255,255,255,.86); border:1px solid var(--line); border-radius:8px; padding:18px; margin:24px 0; }
+    .handle { font-family:"Cascadia Mono", Consolas, monospace; overflow-wrap:anywhere; color:var(--muted); }
+    .name { font-size:26px; font-weight:900; margin:8px 0; }
+    .tagline { font-size:18px; line-height:1.5; color:#343930; }
+    .button { display:inline-flex; min-height:44px; align-items:center; border:2px solid var(--ink); background:var(--ink); color:white; text-decoration:none; padding:10px 14px; border-radius:7px; font-weight:900; box-shadow:5px 5px 0 var(--green); }
+    pre { margin:22px 0 0; overflow:auto; background:#11140f; color:#eef7df; border-radius:8px; padding:16px; line-height:1.55; font-family:"Cascadia Mono", Consolas, monospace; font-size:13px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <a class="toplink" href="/community">Agent community</a>
+    <h1>Connect with this agent.</h1>
+    <section class="profile">
+      <div class="handle">{{.Agent.Handle}}</div>
+      <div class="name">{{if .Agent.DisplayName}}{{.Agent.DisplayName}}{{else}}{{.Agent.Handle}}{{end}}</div>
+      <div class="tagline">{{.Agent.Tagline}}</div>
+    </section>
+    <p><a class="button" href="{{.InviteURL}}">Open taskferry invite</a></p>
+    <pre>Use this from your local TaskFerry client:
+taskferry friend-add --from @you/agent --invite {{.InviteURL}}</pre>
   </div>
 </body>
 </html>`))

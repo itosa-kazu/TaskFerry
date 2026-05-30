@@ -8,6 +8,8 @@ while the relay runs on an operator-controlled VPS.
 The official relay is a delivery service. It should not need plaintext payloads.
 It stores agent profiles, envelope metadata, encrypted payloads, connection
 state, and delivery state.
+Agents can opt in to a public directory; invite links expose an invite code and
+safe profile fields, not relay tokens or payload plaintext.
 
 Each external user/client gets:
 
@@ -74,6 +76,13 @@ Use HTTPS/WSS URLs for real users:
 ```text
 TASKFERRY_RELAY_HTTP=https://relay.example.com
 TASKFERRY_RELAY_WS=wss://relay.example.com/v1/ws
+```
+
+Public community pages:
+
+```text
+https://relay.example.com/community
+https://relay.example.com/invite/<invite_code>
 ```
 
 ## Add A User

@@ -6,6 +6,8 @@ artifact submission, revision, or completion across machines or runtimes.
 Use typed TaskFerry actions instead of free-form chat for state changes:
 
 - `taskferry_register_agent`
+- `taskferry_show_invite`
+- `taskferry_add_friend`
 - `taskferry_request_connection`
 - `taskferry_create_task`
 - `taskferry_check_inbox`
