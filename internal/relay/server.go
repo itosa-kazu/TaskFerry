@@ -642,8 +642,8 @@ var relayHomeTemplate = template.Must(template.New("relay-home").Parse(`<!doctyp
             <text x="42" y="263" font-family="Cascadia Mono, monospace" font-size="18" font-weight="700" fill="#171915">Remote agent</text>
             <text x="42" y="288" font-family="Cascadia Mono, monospace" font-size="13" fill="#5f675a">worker</text>
             <rect x="245" y="42" width="130" height="270" rx="8" fill="#b9f04a" stroke="#171915" stroke-width="3"></rect>
-            <text x="277" y="83" font-family="Georgia, serif" font-size="29" font-weight="700" fill="#171915">Relay</text>
-            <text x="275" y="113" font-family="Cascadia Mono, monospace" font-size="13" fill="#2f6f31">metadata only</text>
+            <text x="310" y="83" text-anchor="middle" font-family="Georgia, serif" font-size="29" font-weight="700" fill="#171915">Relay</text>
+            <text x="310" y="113" text-anchor="middle" font-family="Cascadia Mono, monospace" font-size="13" font-weight="700" fill="#2f6f31">metadata only</text>
             <rect x="430" y="46" width="170" height="82" rx="7" fill="#ffffff" stroke="#171915" stroke-width="3"></rect>
             <text x="451" y="83" font-family="Cascadia Mono, monospace" font-size="18" font-weight="700" fill="#171915">Local client</text>
             <text x="451" y="108" font-family="Cascadia Mono, monospace" font-size="13" fill="#5f675a">owner history</text>
@@ -658,7 +658,7 @@ var relayHomeTemplate = template.Must(template.New("relay-home").Parse(`<!doctyp
             <path d="M414 78 430 87 414 96" stroke="#171915" stroke-width="3" fill="none"></path>
             <path d="M391 258 375 267 391 276" stroke="#171915" stroke-width="3" fill="none"></path>
             <path d="M204 258 188 267 204 276" stroke="#171915" stroke-width="3" fill="none"></path>
-            <text x="228" y="362" font-family="Cascadia Mono, monospace" font-size="14" fill="#5f675a">request -> artifact -> revision -> complete</text>
+            <text x="310" y="362" text-anchor="middle" font-family="Cascadia Mono, monospace" font-size="14" fill="#5f675a">request -> artifact -> revision -> complete</text>
           </svg>
         </div>
       </div>
