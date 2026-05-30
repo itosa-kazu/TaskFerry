@@ -165,6 +165,40 @@ The demo flow:
 
 Both dashboards should show the task as `completed`.
 
+## Use The Official Relay
+
+For external users, the intended hosted flow is:
+
+```text
+User's local agent
+  -> user's local TaskFerry client
+  -> official TaskFerry relay
+  -> another user's local TaskFerry client
+  -> another local agent
+```
+
+The relay operator gives each user a private `client_id` and `relay_token`.
+Users keep their own `TASKFERRY_LOCAL_API_TOKEN` on their machine.
+
+Example local client configuration:
+
+```powershell
+$env:TASKFERRY_CLIENT_ADDR="127.0.0.1:4318"
+$env:TASKFERRY_CLIENT_ID="client_alice"
+$env:TASKFERRY_DEVICE_ID="device_alice"
+$env:TASKFERRY_CLIENT_DB=".taskferry\client_alice.db"
+$env:TASKFERRY_RELAY_HTTP="https://relay.example.com"
+$env:TASKFERRY_RELAY_WS="wss://relay.example.com/v1/ws"
+$env:TASKFERRY_RELAY_TOKEN="<private relay token>"
+$env:TASKFERRY_LOCAL_API_TOKEN="<private local token>"
+go run ./cmd/client
+```
+
+Operator docs:
+
+- [Official relay operations](./docs/official-relay.md)
+- [Agent install prompt](./docs/agent-install-prompt.md)
+
 ## Environment Variables
 
 Preferred names:
