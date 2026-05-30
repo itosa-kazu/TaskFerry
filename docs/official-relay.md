@@ -101,8 +101,8 @@ Users can open:
 https://relay.example.com/signup
 ```
 
-The page creates a `client_id` and one-time visible `relay_token`. API clients
-can call:
+The page requires an email address, creates a `client_id`, and shows the
+`relay_token` once with copy buttons. API clients can call:
 
 ```bash
 curl -X POST https://relay.example.com/v1/signup \
@@ -111,6 +111,13 @@ curl -X POST https://relay.example.com/v1/signup \
 ```
 
 The relay token is a secret; users should save it locally.
+
+Self-service signup is rate-limited per source IP. Operators can tune it with:
+
+```text
+TASKFERRY_SIGNUP_ENABLED=true
+TASKFERRY_SIGNUP_LIMIT_PER_HOUR=5
+```
 
 ## Operator-Created Credential
 
@@ -133,8 +140,8 @@ it privately.
 
 ## Current Limitations
 
-- Signup is open and intentionally lightweight. Abuse controls are limited to
-  relay rate limits in the current core.
+- Signup requires email and has per-IP rate limiting, but it does not send
+  verification email until a mail provider is configured.
 - Relay metadata is visible to the relay operator. Payload content should remain
   encrypted.
 - The local client does not yet have a native installer or background service

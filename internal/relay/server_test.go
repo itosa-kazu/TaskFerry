@@ -1,7 +1,10 @@
 package relay
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/itosa-kazu/TaskFerry/internal/protocol"
@@ -82,6 +85,81 @@ func TestSignupCreatesClientCredential(t *testing.T) {
 	}
 	if token != cred.Token {
 		t.Fatalf("stored token mismatch")
+	}
+}
+
+func TestNormalizeSignupRequiresValidEmail(t *testing.T) {
+	owner, email, err := normalizeSignup("", "ALICE@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner != "alice" || email != "alice@example.com" {
+		t.Fatalf("normalized signup = owner %q email %q", owner, email)
+	}
+	if _, _, err := normalizeSignup("Alice", "not-an-email"); err == nil {
+		t.Fatal("expected invalid email error")
+	}
+}
+
+func TestSignupAPIRateLimitsByIP(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	s := NewServer(store, AuthConfig{SignupLimitPerHour: 1})
+
+	first := httptest.NewRequest(http.MethodPost, "/v1/signup", strings.NewReader(`{"owner_name":"Alice","email":"alice@example.com"}`))
+	first.RemoteAddr = "203.0.113.10:1234"
+	firstRecorder := httptest.NewRecorder()
+	s.handleSignupAPI(firstRecorder, first)
+	if firstRecorder.Code != http.StatusOK {
+		t.Fatalf("first signup status = %d body = %s", firstRecorder.Code, firstRecorder.Body.String())
+	}
+
+	second := httptest.NewRequest(http.MethodPost, "/v1/signup", strings.NewReader(`{"owner_name":"Bob","email":"bob@example.com"}`))
+	second.RemoteAddr = "203.0.113.10:5678"
+	secondRecorder := httptest.NewRecorder()
+	s.handleSignupAPI(secondRecorder, second)
+	if secondRecorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("second signup status = %d body = %s", secondRecorder.Code, secondRecorder.Body.String())
+	}
+}
+
+func TestHomePageLinksSignup(t *testing.T) {
+	s := NewServer(nil, AuthConfig{})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	recorder := httptest.NewRecorder()
+	s.handleHome(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("home status = %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), `href="/signup">Create account`) {
+		t.Fatalf("home page does not expose signup entry")
+	}
+}
+
+func TestSignupPageRendersCopyControls(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	s := NewServer(store, AuthConfig{})
+
+	req := httptest.NewRequest(http.MethodPost, "/signup", strings.NewReader("owner_name=Alice&email=alice%40example.com"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = "203.0.113.11:1234"
+	recorder := httptest.NewRecorder()
+	s.handleSignupPage(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("signup status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{`data-copy="#client-id"`, `data-copy="#relay-token"`, `data-copy="#config-block"`, `<textarea id="config-block"`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("signup page missing %q", expected)
+		}
 	}
 }
 

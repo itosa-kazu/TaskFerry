@@ -14,13 +14,15 @@ Inputs:
 - Relay HTTP: https://relay.example.com
 - Relay WS: wss://relay.example.com/v1/ws
 - Signup page: https://relay.example.com/signup
+- User email: required on the signup page
 - Client ID: created by signup
 - Relay Token: shown once by signup
 - Local API Token: generate a random local token and keep it on this machine
 - Local Port: 4318 unless it is already used
 
 Steps:
-1. Open https://relay.example.com/signup and create a relay credential.
+1. Open https://relay.example.com/signup and create a relay credential with an
+   email address.
 2. Save the returned `client_id` and `relay_token` locally. Do not paste the
    relay token into public chats, issues, or screenshots.
 3. Install Go 1.22 or newer if it is missing.

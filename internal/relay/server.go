@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -24,11 +25,14 @@ type Server struct {
 	mu         sync.RWMutex
 	sessions   map[string]*session
 	rateWindow map[string]*rateCounter
+	signupRate map[string]*rateCounter
 }
 
 type AuthConfig struct {
-	GlobalToken  string
-	ClientTokens map[string]string
+	GlobalToken        string
+	ClientTokens       map[string]string
+	SignupDisabled     bool
+	SignupLimitPerHour int
 }
 
 type session struct {
@@ -46,6 +50,9 @@ func NewServer(store *Store, auth AuthConfig) *Server {
 	if auth.ClientTokens == nil {
 		auth.ClientTokens = map[string]string{}
 	}
+	if auth.SignupLimitPerHour <= 0 {
+		auth.SignupLimitPerHour = 5
+	}
 	return &Server{
 		store: store,
 		auth:  auth,
@@ -54,6 +61,7 @@ func NewServer(store *Store, auth AuthConfig) *Server {
 		},
 		sessions:   map[string]*session{},
 		rateWindow: map[string]*rateCounter{},
+		signupRate: map[string]*rateCounter{},
 	}
 }
 
@@ -117,23 +125,48 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request) {
+	relayHTTP, relayWS := s.relayURLs(r)
 	if r.Method == http.MethodPost {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := r.ParseForm(); err != nil {
 			http.Error(w, "invalid form", http.StatusBadRequest)
 			return
 		}
-		relayHTTP, relayWS := s.relayURLs(r)
-		cred, err := s.store.CreateClient(strings.TrimSpace(r.FormValue("owner_name")), strings.TrimSpace(r.FormValue("email")))
+		if s.auth.SignupDisabled {
+			w.WriteHeader(http.StatusForbidden)
+			_ = signupTemplate.Execute(w, map[string]any{"Error": "Self-service signup is disabled on this relay.", "RelayHTTP": relayHTTP, "RelayWS": relayWS})
+			return
+		}
+		if s.store == nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = signupTemplate.Execute(w, map[string]any{"Error": "Signup storage is unavailable on this relay.", "RelayHTTP": relayHTTP, "RelayWS": relayWS})
+			return
+		}
+		if strings.TrimSpace(r.FormValue("website")) != "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = signupTemplate.Execute(w, map[string]any{"Error": "Could not create relay credential.", "RelayHTTP": relayHTTP, "RelayWS": relayWS})
+			return
+		}
+		if !s.allowSignup(clientIP(r)) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = signupTemplate.Execute(w, map[string]any{"Error": "Too many signup attempts from this network. Try again later.", "RelayHTTP": relayHTTP, "RelayWS": relayWS})
+			return
+		}
+		ownerName, email, err := normalizeSignup(strings.TrimSpace(r.FormValue("owner_name")), strings.TrimSpace(r.FormValue("email")))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = signupTemplate.Execute(w, map[string]any{"Error": err.Error(), "RelayHTTP": relayHTTP, "RelayWS": relayWS, "OwnerName": ownerName, "Email": email})
+			return
+		}
+		cred, err := s.store.CreateClient(ownerName, email)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = signupTemplate.Execute(w, map[string]any{"Error": "Could not create relay credential.", "RelayHTTP": relayHTTP, "RelayWS": relayWS})
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = signupTemplate.Execute(w, signupPageData(relayHTTP, relayWS, cred))
 		return
 	}
-	relayHTTP, relayWS := s.relayURLs(r)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := signupTemplate.Execute(w, map[string]any{"RelayHTTP": relayHTTP, "RelayWS": relayWS}); err != nil {
 		log.Printf("signup render failed: %v", err)
@@ -141,13 +174,30 @@ func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSignupAPI(w http.ResponseWriter, r *http.Request) {
+	if s.auth.SignupDisabled {
+		writeJSON(w, http.StatusForbidden, protocol.SignupResponse{OK: false, Error: "signup_disabled"})
+		return
+	}
+	if s.store == nil {
+		writeJSON(w, http.StatusServiceUnavailable, protocol.SignupResponse{OK: false, Error: "signup_unavailable"})
+		return
+	}
+	if !s.allowSignup(clientIP(r)) {
+		writeJSON(w, http.StatusTooManyRequests, protocol.SignupResponse{OK: false, Error: "too_many_signups"})
+		return
+	}
 	var req protocol.SignupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, protocol.SignupResponse{OK: false, Error: "invalid_json"})
 		return
 	}
+	ownerName, email, err := normalizeSignup(req.OwnerName, req.Email)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, protocol.SignupResponse{OK: false, Error: "invalid_signup", SetupHint: err.Error()})
+		return
+	}
 	relayHTTP, relayWS := s.relayURLs(r)
-	cred, err := s.store.CreateClient(strings.TrimSpace(req.OwnerName), strings.TrimSpace(req.Email))
+	cred, err := s.store.CreateClient(ownerName, email)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, protocol.SignupResponse{OK: false, Error: "signup_failed"})
 		return
@@ -546,6 +596,23 @@ func (s *Server) allowRate(clientID string) bool {
 	return counter.count <= 120
 }
 
+func (s *Server) allowSignup(ip string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	limit := s.auth.SignupLimitPerHour
+	if limit <= 0 {
+		limit = 5
+	}
+	counter := s.signupRate[ip]
+	if counter == nil || now.Sub(counter.windowStart) > time.Hour {
+		s.signupRate[ip] = &rateCounter{windowStart: now, count: 1}
+		return true
+	}
+	counter.count++
+	return counter.count <= limit
+}
+
 func (s *Server) authorized(r *http.Request, clientID string) bool {
 	if s.openRelayAuthMode() {
 		return true
@@ -588,6 +655,61 @@ func (s *Server) openRelayAuthMode() bool {
 	}
 	count, err := s.store.ClientCount()
 	return err == nil && count == 0
+}
+
+func normalizeSignup(ownerName string, email string) (string, string, error) {
+	ownerName = strings.TrimSpace(ownerName)
+	email = strings.ToLower(strings.TrimSpace(email))
+	if !validSignupEmail(email) {
+		return ownerName, email, errors.New("Enter a valid email address.")
+	}
+	if ownerName == "" {
+		ownerName = strings.SplitN(email, "@", 2)[0]
+	}
+	if len(ownerName) > 80 {
+		return ownerName, email, errors.New("Owner name is too long.")
+	}
+	return ownerName, email, nil
+}
+
+func validSignupEmail(email string) bool {
+	if len(email) < 6 || len(email) > 254 {
+		return false
+	}
+	if strings.Count(email, "@") != 1 {
+		return false
+	}
+	parts := strings.SplitN(email, "@", 2)
+	local, domain := parts[0], parts[1]
+	if local == "" || domain == "" || strings.ContainsAny(email, " \t\r\n") {
+		return false
+	}
+	if !strings.Contains(domain, ".") || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return false
+	}
+	return true
+}
+
+func clientIP(r *http.Request) string {
+	if value := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); value != "" {
+		if comma := strings.Index(value, ","); comma >= 0 {
+			value = value[:comma]
+		}
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil && host != "" {
+		return host
+	}
+	if r.RemoteAddr != "" {
+		return r.RemoteAddr
+	}
+	return "unknown"
 }
 
 func normalizeToken(value string) string {
@@ -682,6 +804,26 @@ var relayHomeTemplate = template.Must(template.New("relay-home").Parse(`<!doctyp
       color: var(--green-dark);
       font-size: 14px;
       font-weight: 700;
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .navlink {
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      border: 2px solid var(--ink);
+      background: var(--ink);
+      color: #fff;
+      text-decoration: none;
+      border-radius: 7px;
+      padding: 7px 11px;
+      font-size: 14px;
+      font-weight: 800;
     }
     .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green-dark); }
     .hero {
@@ -807,6 +949,7 @@ var relayHomeTemplate = template.Must(template.New("relay-home").Parse(`<!doctyp
       h1 { font-size: 48px; }
       .lead { font-size: 18px; }
       header { align-items: flex-start; }
+      .header-actions { justify-content: flex-start; }
     }
   </style>
 </head>
@@ -821,7 +964,11 @@ var relayHomeTemplate = template.Must(template.New("relay-home").Parse(`<!doctyp
         </div>
         <span>TaskFerry Relay</span>
       </div>
-      <div class="status"><span class="dot"></span> Online</div>
+      <div class="header-actions">
+        <a class="navlink" href="/signup">Create account</a>
+        <a class="navlink" href="/community">Community</a>
+        <div class="status"><span class="dot"></span> Online</div>
+      </div>
     </header>
 
     <main>
@@ -948,14 +1095,22 @@ var signupTemplate = template.Must(template.New("relay-signup").Parse(`<!doctype
     .lead { color:#343930; font-size:19px; line-height:1.55; max-width:720px; }
     .panel { background:rgba(255,255,255,.88); border:1px solid var(--line); border-radius:8px; padding:18px; margin-top:24px; }
     label { display:block; font-weight:800; margin:14px 0 6px; }
-    input { width:100%; min-height:42px; border:1px solid #cdd4c6; border-radius:7px; padding:9px 10px; font:inherit; background:white; }
-    button, .button { display:inline-flex; min-height:44px; align-items:center; border:2px solid var(--ink); background:var(--ink); color:white; text-decoration:none; padding:10px 14px; border-radius:7px; font-weight:900; box-shadow:5px 5px 0 var(--green); margin-top:16px; cursor:pointer; }
+    input, textarea { width:100%; border:1px solid #cdd4c6; border-radius:7px; padding:9px 10px; font:inherit; background:white; }
+    input { min-height:42px; }
+    textarea { min-height:152px; resize:vertical; line-height:1.5; }
+    button, .button { display:inline-flex; min-height:44px; align-items:center; justify-content:center; border:2px solid var(--ink); background:var(--ink); color:white; text-decoration:none; padding:10px 14px; border-radius:7px; font-weight:900; box-shadow:5px 5px 0 var(--green); margin-top:16px; cursor:pointer; }
+    .copyrow { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:end; }
+    .copyrow button, .copybar button { min-width:96px; margin-top:0; box-shadow:none; }
+    .copybar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:12px; }
+    .copyhint { color:var(--muted); font-size:13px; min-height:18px; }
     code, pre { font-family:"Cascadia Mono", Consolas, monospace; font-size:13px; overflow-wrap:anywhere; }
     pre { overflow:auto; background:#11140f; color:#eef7df; border-radius:8px; padding:16px; line-height:1.55; }
-    .secret { border:2px solid var(--ink); background:#fff; padding:12px; border-radius:8px; }
+    .secret { font-family:"Cascadia Mono", Consolas, monospace; font-size:14px; border:2px solid var(--ink); background:#fff; }
     .warning { color:var(--red); font-weight:800; }
+    .note { color:var(--muted); line-height:1.45; margin:10px 0 0; }
+    .hp { position:absolute; left:-10000px; width:1px; height:1px; overflow:hidden; }
     .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-    @media (max-width:720px) { .grid { grid-template-columns:1fr; } h1 { font-size:42px; } }
+    @media (max-width:720px) { .grid, .copyrow { grid-template-columns:1fr; } h1 { font-size:42px; } }
   </style>
 </head>
 <body>
@@ -973,28 +1128,70 @@ var signupTemplate = template.Must(template.New("relay-signup").Parse(`<!doctype
       <h2>Save this now</h2>
       <p class="warning">The relay token is shown once. Store it locally and do not paste it into public chats, issues, or screenshots.</p>
       <div class="grid">
-        <div><strong>client_id</strong><div class="secret"><code>{{.ClientID}}</code></div></div>
-        <div><strong>relay_token</strong><div class="secret"><code>{{.RelayToken}}</code></div></div>
+        <div>
+          <strong>client_id</strong>
+          <div class="copyrow">
+            <input class="secret" id="client-id" readonly value="{{.ClientID}}">
+            <button type="button" data-copy="#client-id">Copy</button>
+          </div>
+        </div>
+        <div>
+          <strong>relay_token</strong>
+          <div class="copyrow">
+            <input class="secret" id="relay-token" readonly value="{{.RelayToken}}">
+            <button type="button" data-copy="#relay-token">Copy</button>
+          </div>
+        </div>
       </div>
-      <pre>TASKFERRY_RELAY_HTTP={{.RelayHTTP}}
+      <label for="config-block">Environment config</label>
+      <textarea id="config-block" readonly spellcheck="false">TASKFERRY_RELAY_HTTP={{.RelayHTTP}}
 TASKFERRY_RELAY_WS={{.RelayWS}}
 TASKFERRY_CLIENT_ID={{.ClientID}}
 TASKFERRY_RELAY_TOKEN={{.RelayToken}}
-TASKFERRY_LOCAL_API_TOKEN=&lt;generate locally&gt;</pre>
+TASKFERRY_LOCAL_API_TOKEN=&lt;generate locally&gt;</textarea>
+      <div class="copybar">
+        <button type="button" data-copy="#config-block">Copy config</button>
+        <span class="copyhint" id="copyhint" aria-live="polite"></span>
+      </div>
       <p><a class="button" href="/community">Browse public agents</a></p>
     </section>
     {{else}}
     <section class="panel">
       <form method="post" action="/signup">
         <label for="owner_name">Owner name</label>
-        <input id="owner_name" name="owner_name" placeholder="alice" autocomplete="name">
-        <label for="email">Email, optional</label>
-        <input id="email" name="email" placeholder="alice@example.com" autocomplete="email">
-        <button type="submit">Create relay credential</button>
+        <input id="owner_name" name="owner_name" value="{{.OwnerName}}" placeholder="alice" autocomplete="name">
+        <label for="email">Email</label>
+        <input id="email" name="email" value="{{.Email}}" placeholder="alice@example.com" autocomplete="email" inputmode="email" required>
+        <div class="hp" aria-hidden="true">
+          <label for="website">Website</label>
+          <input id="website" name="website" tabindex="-1" autocomplete="off">
+        </div>
+        <p class="note">Email is required for account ownership and abuse control. Full email verification will be added when the relay is connected to a mail provider.</p>
+        <button type="submit">Create relay account</button>
       </form>
     </section>
     {{end}}
   </div>
+  <script>
+    document.querySelectorAll("[data-copy]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const target = document.querySelector(button.dataset.copy);
+        const hint = document.querySelector("#copyhint");
+        if (!target) return;
+        target.focus();
+        target.select();
+        try {
+          await navigator.clipboard.writeText(target.value);
+          button.textContent = "Copied";
+          if (hint) hint.textContent = "Copied to clipboard.";
+          setTimeout(() => { button.textContent = button.dataset.copy === "#config-block" ? "Copy config" : "Copy"; }, 1400);
+        } catch (err) {
+          document.execCommand("copy");
+          if (hint) hint.textContent = "Selected. Press Ctrl+C if your browser blocks clipboard access.";
+        }
+      });
+    });
+  </script>
 </body>
 </html>`))
 
