@@ -56,7 +56,9 @@ Add a real domain and reverse proxy to the local relay port:
 
 ```caddy
 relay.example.com {
-	reverse_proxy 127.0.0.1:18080
+	reverse_proxy 127.0.0.1:18080 {
+		header_up X-Forwarded-Proto https
+	}
 }
 ```
 
