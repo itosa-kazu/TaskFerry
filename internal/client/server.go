@@ -59,6 +59,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /agents", s.handleAgents)
 	mux.HandleFunc("POST /agents", s.handleCreateAgent)
 	mux.HandleFunc("GET /invites", s.handleInviteForAgent)
+	mux.HandleFunc("GET /connect", s.handleConnectPage)
+	mux.HandleFunc("POST /connect", s.handleConnectPage)
 	mux.HandleFunc("POST /friends/request", s.handleFriendRequest)
 	mux.HandleFunc("POST /connections/request", s.handleConnectionRequest)
 	mux.HandleFunc("POST /connections/accept", s.handleConnectionAccept)
@@ -164,6 +166,112 @@ func (s *Server) handleFriendRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "to": invite.Agent.Handle, "invite_code": invite.InviteCode, "message_id": id})
+}
+
+func (s *Server) handleConnectPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		s.handleConnectSubmit(w, r)
+		return
+	}
+
+	inviteRaw := r.URL.Query().Get("invite")
+	token := localTokenFromRequest(r)
+	data := s.connectPageData(r, inviteRaw, token, "")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := connectTemplate.Execute(w, data); err != nil {
+		log.Printf("connect page render failed: %v", err)
+	}
+}
+
+func (s *Server) handleConnectSubmit(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	inviteRaw := r.FormValue("invite")
+	token := r.FormValue("token")
+	if token == "" {
+		token = localTokenFromRequest(r)
+	}
+	if !s.localRequestAuthorized(r, token) {
+		data := s.connectPageData(r, inviteRaw, token, "Local API token is required before an identity can act on this invite.")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = connectTemplate.Execute(w, data)
+		return
+	}
+
+	from := r.FormValue("from")
+	message := r.FormValue("message")
+	if from == "" {
+		data := s.connectPageData(r, inviteRaw, token, "Choose a local agent identity before connecting.")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = connectTemplate.Execute(w, data)
+		return
+	}
+	if message == "" {
+		message = "Please connect for TaskFerry work."
+	}
+	invite, err := s.resolveInvite(inviteRaw)
+	if err != nil {
+		data := s.connectPageData(r, inviteRaw, token, err.Error())
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = connectTemplate.Execute(w, data)
+		return
+	}
+	if invite.Agent == nil || invite.Agent.Handle == "" {
+		data := s.connectPageData(r, inviteRaw, token, "Invite does not contain an agent profile.")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = connectTemplate.Execute(w, data)
+		return
+	}
+	msgID, err := s.sendTyped(from, []string{invite.Agent.Handle}, protocol.MessageTypeConnectionRequest, map[string]any{"message": message, "invite_code": invite.InviteCode}, "", "")
+	if err != nil {
+		data := s.connectPageData(r, inviteRaw, token, err.Error())
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = connectTemplate.Execute(w, data)
+		return
+	}
+
+	data := s.connectPageData(r, inviteRaw, token, "")
+	data["Sent"] = true
+	data["From"] = from
+	data["To"] = invite.Agent.Handle
+	data["MessageID"] = msgID
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := connectTemplate.Execute(w, data); err != nil {
+		log.Printf("connect page render failed: %v", err)
+	}
+}
+
+func (s *Server) connectPageData(r *http.Request, inviteRaw string, token string, pageError string) map[string]any {
+	data := map[string]any{
+		"InviteRaw":  inviteRaw,
+		"Token":      token,
+		"NeedsToken": s.cfg.LocalAPIToken != "" && !s.localRequestAuthorized(r, token),
+		"Error":      pageError,
+		"Message":    "Please connect for TaskFerry work.",
+	}
+	if inviteRaw != "" {
+		if invite, err := s.resolveInvite(inviteRaw); err == nil {
+			data["Invite"] = invite
+			data["InviteAgent"] = invite.Agent
+		} else if pageError == "" {
+			data["Error"] = err.Error()
+		}
+	}
+	if s.localRequestAuthorized(r, token) {
+		if agents, err := s.store.Agents(); err == nil {
+			data["Agents"] = agents
+		} else if pageError == "" {
+			data["Error"] = err.Error()
+		}
+	}
+	return data
 }
 
 func (s *Server) handleConnectionRequest(w http.ResponseWriter, r *http.Request) {
@@ -778,18 +886,39 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 
 func (s *Server) withLocalAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.LocalAPIToken == "" || r.URL.Path == "/health" {
+		if s.cfg.LocalAPIToken == "" || r.URL.Path == "/health" || r.URL.Path == "/connect" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !tokenOK(r.Header.Get("Authorization"), s.cfg.LocalAPIToken) &&
-			!tokenOK(r.Header.Get("X-TaskFerry-Local-Token"), s.cfg.LocalAPIToken) &&
-			!tokenOK(r.URL.Query().Get("token"), s.cfg.LocalAPIToken) {
+		if !s.localRequestAuthorized(r, "") {
 			writeJSON(w, http.StatusUnauthorized, errorResponse("unauthorized"))
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) localRequestAuthorized(r *http.Request, explicitToken string) bool {
+	if s.cfg.LocalAPIToken == "" {
+		return true
+	}
+	return tokenOK(explicitToken, s.cfg.LocalAPIToken) ||
+		tokenOK(r.Header.Get("Authorization"), s.cfg.LocalAPIToken) ||
+		tokenOK(r.Header.Get("X-TaskFerry-Local-Token"), s.cfg.LocalAPIToken) ||
+		tokenOK(r.URL.Query().Get("token"), s.cfg.LocalAPIToken)
+}
+
+func localTokenFromRequest(r *http.Request) string {
+	if value := r.URL.Query().Get("token"); value != "" {
+		return value
+	}
+	if value := r.Header.Get("X-TaskFerry-Local-Token"); value != "" {
+		return value
+	}
+	if value := r.Header.Get("Authorization"); value != "" {
+		return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(value), "Bearer "))
+	}
+	return ""
 }
 
 func tokenOK(value string, expected string) bool {
@@ -856,6 +985,128 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!doctype
   <table><tr><th>Time</th><th>Direction</th><th>Type</th><th>From</th><th>To</th><th>Task</th><th>Payload</th></tr>
   {{range .Messages}}<tr><td>{{.CreatedAt}}</td><td>{{.Direction}}</td><td>{{.Type}}</td><td><code>{{.Sender}}</code></td><td>{{range .Recipients}}<code>{{.}}</code> {{end}}</td><td><code>{{.TaskID}}</code></td><td><pre>{{printf "%s" .Plaintext}}</pre></td></tr>{{end}}
   </table>
+</main>
+</body>
+</html>`))
+
+var connectTemplate = template.Must(template.New("connect").Parse(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>TaskFerry Connect</title>
+  <style>
+    :root { --ink:#171915; --muted:#5f675a; --paper:#fbfaf4; --panel:#fff; --line:#d9decf; --green:#b9f04a; --red:#a6362f; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        linear-gradient(90deg, rgba(23,25,21,.045) 1px, transparent 1px) 0 0 / 32px 32px,
+        linear-gradient(rgba(23,25,21,.035) 1px, transparent 1px) 0 0 / 32px 32px,
+        var(--paper);
+      color: var(--ink);
+      font-family: "Segoe UI", system-ui, sans-serif;
+    }
+    main { max-width: 860px; margin: 0 auto; padding: 36px 20px 70px; }
+    h1 { font-family: Georgia, "Times New Roman", serif; font-size: 56px; line-height: .95; margin: 0 0 18px; }
+    h2 { font-size: 20px; margin: 26px 0 12px; }
+    .panel { background: rgba(255,255,255,.88); border: 1px solid var(--line); border-radius: 8px; padding: 18px; margin: 18px 0; }
+    .profile { display: grid; gap: 8px; }
+    .handle, code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 13px; overflow-wrap: anywhere; }
+    .name { font-size: 24px; font-weight: 800; }
+    .muted { color: var(--muted); line-height: 1.5; }
+    .error { color: var(--red); font-weight: 700; }
+    .success { border-color: #89b84f; background: #f3ffe2; }
+    label { display: block; font-weight: 700; margin: 14px 0 6px; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid #cdd4c6;
+      border-radius: 7px;
+      min-height: 42px;
+      padding: 9px 10px;
+      font: inherit;
+      background: #fff;
+    }
+    textarea { min-height: 84px; resize: vertical; }
+    button, .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      border: 2px solid var(--ink);
+      background: var(--ink);
+      color: #fff;
+      text-decoration: none;
+      padding: 10px 14px;
+      border-radius: 7px;
+      font-weight: 800;
+      box-shadow: 5px 5px 0 var(--green);
+      cursor: pointer;
+      margin-top: 16px;
+    }
+    .row { display: grid; grid-template-columns: 1fr; gap: 10px; }
+    @media (max-width: 640px) { h1 { font-size: 42px; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Connect with this agent.</h1>
+
+  {{if .Sent}}
+  <section class="panel success">
+    <h2>Request sent</h2>
+    <p class="muted"><code>{{.From}}</code> requested a TaskFerry connection with <code>{{.To}}</code>.</p>
+    <p class="muted">Message id: <code>{{.MessageID}}</code></p>
+    <p><a class="button" href="/?token={{.Token}}">Back to local dashboard</a></p>
+  </section>
+  {{end}}
+
+  {{if .Error}}
+  <section class="panel"><p class="error">{{.Error}}</p></section>
+  {{end}}
+
+  {{if .InviteAgent}}
+  <section class="panel profile">
+    <div class="handle">{{.InviteAgent.Handle}}</div>
+    <div class="name">{{if .InviteAgent.DisplayName}}{{.InviteAgent.DisplayName}}{{else}}{{.InviteAgent.Handle}}{{end}}</div>
+    <div class="muted">{{if .InviteAgent.Tagline}}{{.InviteAgent.Tagline}}{{else}}{{.InviteAgent.Description}}{{end}}</div>
+  </section>
+  {{else}}
+  <section class="panel">
+    <p class="muted">Paste a TaskFerry invite URL to preview the agent and choose a local identity.</p>
+  </section>
+  {{end}}
+
+  <section class="panel">
+    <form method="post" action="/connect">
+      <label for="invite">Invite</label>
+      <input id="invite" name="invite" value="{{.InviteRaw}}" placeholder="taskferry://relay.meiyaku.com/invite/inv_...">
+
+      {{if .NeedsToken}}
+      <label for="token">Local API token</label>
+      <input id="token" name="token" value="{{.Token}}" type="password" autocomplete="off" placeholder="TASKFERRY_LOCAL_API_TOKEN">
+      <p class="muted">The invite preview is public. Choosing a local identity requires your local token.</p>
+      {{else}}
+      <input type="hidden" name="token" value="{{.Token}}">
+      {{end}}
+
+      {{if .Agents}}
+      <label for="from">Use local identity</label>
+      <select id="from" name="from">
+        {{range .Agents}}
+        <option value="{{.Handle}}">{{.Handle}}{{if .DisplayName}} - {{.DisplayName}}{{end}}</option>
+        {{end}}
+      </select>
+      <label for="message">Request message</label>
+      <textarea id="message" name="message">{{.Message}}</textarea>
+      <button type="submit">Send connection request</button>
+      {{else}}
+      {{if not .NeedsToken}}
+      <p class="muted">No local agent identities exist yet. Create one first from the local dashboard or CLI.</p>
+      {{end}}
+      <button type="submit">Continue</button>
+      {{end}}
+    </form>
+  </section>
 </main>
 </body>
 </html>`))

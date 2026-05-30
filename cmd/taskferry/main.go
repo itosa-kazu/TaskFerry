@@ -5,7 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"os/exec"
+	"runtime"
 
 	"github.com/itosa-kazu/TaskFerry/internal/localapi"
 )
@@ -38,6 +41,7 @@ dispatch:
 		"health":             cmdHealth,
 		"agent-create":       cmdAgentCreate,
 		"invite-show":        cmdInviteShow,
+		"invite-open":        cmdInviteOpen,
 		"friend-add":         cmdFriendAdd,
 		"connection-request": cmdConnectionRequest,
 		"connection-accept":  cmdConnectionAccept,
@@ -93,6 +97,33 @@ func cmdInviteShow(c *localapi.Client, args []string) (json.RawMessage, error) {
 	return c.AgentInvite(*agent)
 }
 
+func cmdInviteOpen(c *localapi.Client, args []string) (json.RawMessage, error) {
+	fs := flag.NewFlagSet("invite-open", flag.ContinueOnError)
+	invite := fs.String("invite", "", "taskferry:// relay invite URL or invite code")
+	noBrowser := fs.Bool("no-browser", false, "print the local confirmation URL without opening a browser")
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	inviteValue := *invite
+	if inviteValue == "" && fs.NArg() > 0 {
+		inviteValue = fs.Arg(0)
+	}
+	if inviteValue == "" {
+		return nil, fmt.Errorf("missing invite")
+	}
+	target := localConnectURL(c, inviteValue)
+	if !*noBrowser {
+		if err := openBrowser(target); err != nil {
+			return nil, err
+		}
+	}
+	raw, err := json.Marshal(map[string]any{"ok": true, "url": target, "opened": !*noBrowser})
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 func cmdFriendAdd(c *localapi.Client, args []string) (json.RawMessage, error) {
 	fs := flag.NewFlagSet("friend-add", flag.ContinueOnError)
 	from := fs.String("from", "", "sender handle")
@@ -102,6 +133,28 @@ func cmdFriendAdd(c *localapi.Client, args []string) (json.RawMessage, error) {
 		return nil, err
 	}
 	return c.FriendAdd(*from, *invite, *message)
+}
+
+func localConnectURL(c *localapi.Client, invite string) string {
+	q := url.Values{}
+	q.Set("invite", invite)
+	if c.Token != "" {
+		q.Set("token", c.Token)
+	}
+	return c.BaseURL + "/connect?" + q.Encode()
+}
+
+func openBrowser(target string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", target)
+	case "darwin":
+		cmd = exec.Command("open", target)
+	default:
+		cmd = exec.Command("xdg-open", target)
+	}
+	return cmd.Start()
 }
 
 func cmdConnectionRequest(c *localapi.Client, args []string) (json.RawMessage, error) {
@@ -278,6 +331,7 @@ Commands:
   health
   agent-create --handle @owner/agent --display-name NAME --description TEXT --tagline TEXT --capabilities a,b --public
   invite-show --agent @owner/agent
+  invite-open taskferry://relay.example.com/invite/inv_x
   friend-add --from @owner/agent --invite taskferry://relay.example.com/invite/inv_x --message TEXT
   connection-request --from @a/agent --to @b/agent --message TEXT
   connection-accept --from @b/agent --to @a/agent

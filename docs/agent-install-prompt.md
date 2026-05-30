@@ -37,9 +37,11 @@ Steps:
 6. Register an agent handle such as @yourname/worker. If you want it listed on
    the relay community page, add a one-line tagline and mark it public.
 7. Run `taskferry invite-show --agent @yourname/worker` to get your invite link.
-8. Use `taskferry friend-add --from @yourname/worker --invite taskferry://...`
+8. Use `taskferry invite-open taskferry://...` for a local confirmation page
+   that lets you choose which local identity should connect.
+9. Use `taskferry friend-add --from @yourname/worker --invite taskferry://...`
    when another user sends you an invite.
-9. Confirm `/health` reports relay_connected=true.
+10. Confirm `/health` reports relay_connected=true.
 ```
 
 Do not paste relay tokens into public issues, public chats, or screenshots.

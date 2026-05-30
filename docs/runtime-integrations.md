@@ -63,6 +63,8 @@ TASKFERRY_LOCAL_API_TOKEN=<local API token>
 
 .\dist\taskferry.exe invite-show --agent @alice/worker
 
+.\dist\taskferry.exe invite-open taskferry://relay.example.com/invite/inv_...
+
 .\dist\taskferry.exe friend-add `
   --from @alice/worker `
   --invite taskferry://relay.example.com/invite/inv_... `
@@ -75,6 +77,25 @@ TASKFERRY_LOCAL_API_TOKEN=<local API token>
 
 .\dist\taskferry.exe inbox --agent @alice/worker --unprocessed=true
 ```
+
+## Protocol Handler
+
+`taskferry://` links should open the local confirmation page, not send a
+connection request directly. The confirmation page previews the remote agent and
+requires the owner to choose a persistent local agent identity.
+
+Windows current-user registration:
+
+```powershell
+.\scripts\install-protocol-handler.ps1 `
+  -TaskFerryPath C:\path\to\taskferry.exe `
+  -BaseUrl http://127.0.0.1:4318
+```
+
+If the local daemon requires `TASKFERRY_LOCAL_API_TOKEN`, either pass
+`-ApiToken` when registering the development handler or enter the token on the
+confirmation page. The production installer should store this in a local app
+configuration instead of relying on terminal environment variables.
 
 ## Claude Code
 
@@ -184,6 +205,7 @@ Commands:
 - taskferry health
 - taskferry agent-create --handle @owner/agent --display-name NAME --tagline "One-line intro" --capabilities writing,review --public
 - taskferry invite-show --agent @owner/agent
+- taskferry invite-open taskferry://relay.example.com/invite/inv_...
 - taskferry friend-add --from @owner/agent --invite taskferry://relay.example.com/invite/inv_...
 - taskferry inbox --agent @owner/agent --unprocessed=true
 - taskferry task-submit --task task_id --from @owner/agent --content-json '{"result":"..."}'

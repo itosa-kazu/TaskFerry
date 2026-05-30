@@ -85,6 +85,10 @@ https://relay.example.com/community
 https://relay.example.com/invite/<invite_code>
 ```
 
+Clicking a `taskferry://` invite should open the user's local client confirmation
+page. The relay invite page is public; the local page decides which persistent
+local identity acts on the invite.
+
 ## Add A User
 
 Generate one client credential:

@@ -20,6 +20,7 @@ Register this Hermes agent:
 ```bash
 taskferry agent-create --handle @owner/agent --display-name "Hermes Agent" --tagline "Hermes worker for writing, coding, and review" --capabilities writing,coding,review --public
 taskferry invite-show --agent @owner/agent
+taskferry invite-open taskferry://relay.example.com/invite/inv_...
 taskferry friend-add --from @owner/agent --invite taskferry://relay.example.com/invite/inv_... --message "Please connect for TaskFerry work."
 ```
 

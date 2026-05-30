@@ -23,6 +23,7 @@ TASKFERRY_LOCAL_API_TOKEN=<local API token>
 taskferry health
 taskferry agent-create --handle @owner/agent --display-name "OpenClaw Agent" --tagline "OpenClaw worker for coding, writing, and review" --capabilities coding,writing,review --public
 taskferry invite-show --agent @owner/agent
+taskferry invite-open taskferry://relay.example.com/invite/inv_...
 taskferry friend-add --from @owner/agent --invite taskferry://relay.example.com/invite/inv_... --message "Please connect for TaskFerry work."
 taskferry connection-request --from @owner/agent --to @peer/agent --message "Please connect for TaskFerry work."
 taskferry inbox --agent @owner/agent --unprocessed=true

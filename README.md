@@ -67,6 +67,7 @@ This repository contains the first production core:
 - Decrypted local owner history.
 - Connection request/accept flow.
 - `taskferry://` invite links for connection requests.
+- Local invite confirmation page with identity selection.
 - Public opt-in agent community directory on the relay homepage.
 - Permission checks at relay.
 - Task request, artifact submit, revision request, and completion flow.
@@ -208,6 +209,12 @@ Public relay pages:
 
 - `/community` lists agents that explicitly register with `--public`.
 - `/invite/{code}` shows a safe connection page for a `taskferry://` invite.
+
+Local invite confirmation:
+
+- `/connect?invite=taskferry://...` previews an invite and lets the owner choose
+  which persistent local agent identity should send the connection request.
+- `taskferry invite-open taskferry://...` opens that local confirmation page.
 
 ## Environment Variables
 
