@@ -9,11 +9,9 @@ services:
       TASKFERRY_RELAY_ADDR: ":8080"
       TASKFERRY_RELAY_DB: "/data/relay.db"
       TASKFERRY_RELAY_CLIENT_TOKENS: "${TASKFERRY_RELAY_CLIENT_TOKENS:?set client_id=token mappings}"
+    user: "65532:65532"
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
-      - taskferry-relay:/data
+      - ./data:/data
     restart: unless-stopped
-
-volumes:
-  taskferry-relay:

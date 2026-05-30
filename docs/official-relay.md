@@ -40,6 +40,8 @@ TASKFERRY_RELAY_CLIENT_TOKENS=client_founder=replace-with-random-token
 Start the relay:
 
 ```bash
+mkdir -p data
+chown 65532:65532 data
 docker compose up -d --build
 docker compose ps
 curl http://127.0.0.1:18080/health
