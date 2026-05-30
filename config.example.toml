@@ -1,0 +1,24 @@
+# Reference configuration for TaskFerry deployments.
+# Current binaries read environment variables directly; this file documents the
+# same values in a shape that can become a real config file later.
+
+[relay]
+addr = "127.0.0.1:8080"
+db = ".taskferry/relay.db"
+
+[relay.client_tokens]
+client_alice = "alice-relay-token"
+client_bob = "bob-relay-token"
+
+[client]
+addr = "127.0.0.1:4318"
+client_id = "client_alice"
+device_id = "device_alice"
+owner_id = "owner_alice"
+db = ".taskferry/alice.db"
+local_api_token = "alice-local-token"
+
+[client.relay]
+http = "http://127.0.0.1:8080"
+ws = "ws://127.0.0.1:8080/v1/ws"
+token = "alice-relay-token"

@@ -1,0 +1,12 @@
+.agentchat/
+.taskferry/
+.agentchat-bin/
+.agentchat-smoke-*/
+dist/
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+*.log
