@@ -2,7 +2,10 @@
 .taskferry/
 .agentchat-bin/
 .agentchat-smoke-*/
-dist/
+/dist/
+node_modules/
+__pycache__/
+*.pyc
 .env
 .env.*
 !.env.example

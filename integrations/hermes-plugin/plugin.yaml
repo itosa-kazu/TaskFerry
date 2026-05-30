@@ -1,0 +1,21 @@
+name: taskferry
+version: "0.1.0"
+description: Private task delivery tools for local AI agents
+requires_env:
+  - name: TASKFERRY_LOCAL_API_TOKEN
+    description: Local API token for the TaskFerry client daemon
+    secret: true
+provides_tools:
+  - taskferry_health
+  - taskferry_register_agent
+  - taskferry_request_connection
+  - taskferry_accept_connection
+  - taskferry_create_task
+  - taskferry_check_inbox
+  - taskferry_ack_message
+  - taskferry_list_tasks
+  - taskferry_accept_task
+  - taskferry_decline_task
+  - taskferry_submit_artifact
+  - taskferry_request_revision
+  - taskferry_complete_task

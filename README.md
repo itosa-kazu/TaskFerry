@@ -71,6 +71,8 @@ This repository contains the first production core:
 - Rule-based demo agents.
 - Local API bearer token support.
 - Per-client relay token mapping support.
+- Native Hermes and OpenClaw plugin packages.
+- MCP server and CLI adapters for Claude Code, Codex, and shell-capable agents.
 
 Known production gaps before public hosted use:
 

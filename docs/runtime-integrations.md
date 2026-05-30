@@ -95,9 +95,71 @@ Codex environment cannot load a custom MCP server, use the CLI tool from shell:
 .\dist\taskferry.exe task-submit --task task_... --from @alice/worker --content-json '{"result":"done"}'
 ```
 
-## Hermes
+## Native Hermes Plugin
 
-Hermes agents can use the CLI adapter from their shell/tool execution surface.
+TaskFerry ships a Hermes plugin in:
+
+```text
+integrations/hermes-plugin
+```
+
+Hermes plugin docs use `plugin.yaml` plus Python `register(ctx)` for custom
+tools. Install locally:
+
+```bash
+mkdir -p ~/.hermes/plugins
+ln -s /path/to/TaskFerry/integrations/hermes-plugin ~/.hermes/plugins/taskferry
+hermes plugins enable taskferry
+```
+
+Set:
+
+```bash
+export TASKFERRY_LOCAL_URL=http://127.0.0.1:4318
+export TASKFERRY_LOCAL_API_TOKEN=<local API token>
+```
+
+Restart Hermes. The `taskferry_*` tools should appear in the Hermes tool list.
+
+## Native OpenClaw Plugin
+
+TaskFerry ships an OpenClaw native plugin package in:
+
+```text
+integrations/openclaw-plugin
+```
+
+OpenClaw tool plugin docs use `defineToolPlugin`, `openclaw.plugin.json`, and a
+package entry under `package.json` `openclaw.extensions`. Install locally:
+
+```bash
+openclaw plugins install --link ./integrations/openclaw-plugin
+openclaw plugins enable taskferry
+openclaw gateway restart
+```
+
+Set env vars for the OpenClaw Gateway process:
+
+```bash
+export TASKFERRY_LOCAL_URL=http://127.0.0.1:4318
+export TASKFERRY_LOCAL_API_TOKEN=<local API token>
+```
+
+Restart the Gateway. If your OpenClaw configuration uses explicit tool
+allowlists, allow `taskferry` or the individual `taskferry_*` tool names.
+
+Validate before publishing:
+
+```bash
+cd integrations/openclaw-plugin
+npm install
+npm run plugin:validate
+openclaw plugins inspect taskferry --runtime --json
+```
+
+## Hermes CLI Adapter
+
+Hermes agents can also use the CLI adapter from their shell/tool execution surface.
 Give the agent this instruction:
 
 ```text
@@ -117,9 +179,9 @@ Commands:
 The native Hermes plugin wrapper should install the binary, set the local env,
 and expose these commands as named tools.
 
-## OpenClaw
+## OpenClaw CLI Adapter
 
-OpenClaw plugins can use the same CLI adapter pattern. The important boundary is
+OpenClaw can also use the same CLI adapter pattern. The important boundary is
 that OpenClaw should call the local TaskFerry daemon, not the relay directly.
 
 Recommended plugin behavior:

@@ -1,0 +1,25 @@
+{
+  "name": "@taskferry/openclaw",
+  "version": "0.1.0",
+  "description": "TaskFerry tools for private local-first agent task delivery.",
+  "type": "module",
+  "scripts": {
+    "plugin:validate": "openclaw plugins validate --root . --entry ./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "dependencies": {
+    "typebox": "^1.1.38"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.17"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  }
+}
