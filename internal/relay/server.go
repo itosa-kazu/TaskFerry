@@ -407,9 +407,11 @@ func (s *Server) handleInvitePage(w http.ResponseWriter, r *http.Request) {
 
 func invitePageData(out protocol.InviteResponse) map[string]any {
 	return map[string]any{
-		"Agent":        out.Agent,
-		"InviteURL":    template.URL(out.InviteURL),
-		"WebInviteURL": out.WebInviteURL,
+		"Agent":           out.Agent,
+		"InviteURL":       template.URL(out.InviteURL),
+		"InviteURLText":   out.InviteURL,
+		"WebInviteURL":    out.WebInviteURL,
+		"LocalConnectURL": template.URL("http://127.0.0.1:4318/connect?invite=" + url.QueryEscape(out.InviteURL)),
 	}
 }
 
@@ -1350,7 +1352,12 @@ var relayInviteTemplate = template.Must(template.New("relay-invite").Parse(`<!do
     .handle { font-family:"Cascadia Mono", Consolas, monospace; overflow-wrap:anywhere; color:var(--muted); }
     .name { font-size:26px; font-weight:900; margin:8px 0; }
     .tagline { font-size:18px; line-height:1.5; color:#343930; }
-    .button { display:inline-flex; min-height:44px; align-items:center; border:2px solid var(--ink); background:var(--ink); color:white; text-decoration:none; padding:10px 14px; border-radius:7px; font-weight:900; box-shadow:5px 5px 0 var(--green); }
+    .actions { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin:20px 0; }
+    .button, button { display:inline-flex; min-height:44px; align-items:center; border:2px solid var(--ink); background:var(--ink); color:white; text-decoration:none; padding:10px 14px; border-radius:7px; font-weight:900; box-shadow:5px 5px 0 var(--green); cursor:pointer; }
+    .button.secondary { background:white; color:var(--ink); box-shadow:none; }
+    .muted { color:var(--muted); line-height:1.5; }
+    .hint { color:var(--muted); font-size:13px; min-height:18px; }
+    textarea { width:100%; min-height:74px; border:1px solid var(--line); border-radius:8px; padding:10px; font-family:"Cascadia Mono", Consolas, monospace; font-size:13px; resize:vertical; }
     pre { margin:22px 0 0; overflow:auto; background:#11140f; color:#eef7df; border-radius:8px; padding:16px; line-height:1.55; font-family:"Cascadia Mono", Consolas, monospace; font-size:13px; }
   </style>
 </head>
@@ -1363,9 +1370,39 @@ var relayInviteTemplate = template.Must(template.New("relay-invite").Parse(`<!do
       <div class="name">{{if .Agent.DisplayName}}{{.Agent.DisplayName}}{{else}}{{.Agent.Handle}}{{end}}</div>
       <div class="tagline">{{.Agent.Tagline}}</div>
     </section>
-    <p><a class="button" href="{{.InviteURL}}">Open taskferry invite</a></p>
+    <div class="actions">
+      <a class="button" id="protocol-link" href="{{.InviteURL}}">Open taskferry invite</a>
+      <a class="button secondary" href="{{.LocalConnectURL}}">Open local client</a>
+    </div>
+    <p class="muted">If the first button does nothing, this computer has not registered the <code>taskferry://</code> protocol handler yet. Use the local-client button if TaskFerry is running, or copy the invite below.</p>
+    <textarea id="invite-link" readonly>{{.InviteURLText}}</textarea>
+    <div class="actions">
+      <button type="button" data-copy="#invite-link">Copy invite link</button>
+      <span class="hint" id="copyhint" aria-live="polite"></span>
+    </div>
     <pre>Use this from your local TaskFerry client:
 taskferry friend-add --from @you/agent --invite {{.InviteURL}}</pre>
   </div>
+  <script>
+    document.querySelectorAll("[data-copy]").forEach((button) => {
+      const originalLabel = button.textContent;
+      button.addEventListener("click", async () => {
+        const target = document.querySelector(button.dataset.copy);
+        const hint = document.querySelector("#copyhint");
+        if (!target) return;
+        target.focus();
+        target.select();
+        try {
+          await navigator.clipboard.writeText(target.value);
+          button.textContent = "Copied";
+          if (hint) hint.textContent = "Copied to clipboard.";
+          setTimeout(() => { button.textContent = originalLabel; }, 1400);
+        } catch (err) {
+          document.execCommand("copy");
+          if (hint) hint.textContent = "Selected. Press Ctrl+C if your browser blocks clipboard access.";
+        }
+      });
+    });
+  </script>
 </body>
 </html>`))

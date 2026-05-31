@@ -241,8 +241,15 @@ func TestInvitePageKeepsTaskFerryHref(t *testing.T) {
 		t.Fatalf("invite status = %d body = %s", recorder.Code, recorder.Body.String())
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, `href="taskferry://example.com/invite/`) {
-		t.Fatalf("invite page missing taskferry href: %s", body)
+	for _, expected := range []string{
+		`href="taskferry://example.com/invite/`,
+		`href="http://127.0.0.1:4318/connect?invite=taskferry%3A%2F%2Fexample.com%2Finvite%2F`,
+		`data-copy="#invite-link"`,
+		`Copy invite link`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("invite page missing %q: %s", expected, body)
+		}
 	}
 	if strings.Contains(body, "#ZgotmplZ") {
 		t.Fatalf("invite href was sanitized: %s", body)
