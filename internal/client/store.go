@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/itosa-kazu/TaskFerry/internal/protocol"
+	"github.com/itosa-kazu/TaskFerry/internal/secretstore"
 
 	_ "modernc.org/sqlite"
 )
@@ -181,7 +182,10 @@ func (s *Store) SavedRelayConfig() (Config, error) {
 		case "relay_ws":
 			cfg.RelayWS = value
 		case "relay_token":
-			cfg.RelayToken = value
+			cfg.RelayToken, err = secretstore.Unprotect(value)
+			if err != nil {
+				return Config{}, err
+			}
 		}
 	}
 	return cfg, rows.Err()
@@ -189,13 +193,17 @@ func (s *Store) SavedRelayConfig() (Config, error) {
 
 func (s *Store) SaveRelayConfig(cfg Config) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	relayToken, err := secretstore.Protect("relay_token", cfg.RelayToken)
+	if err != nil {
+		return err
+	}
 	values := map[string]string{
 		"client_id":   cfg.ClientID,
 		"device_id":   cfg.DeviceID,
 		"owner_id":    cfg.OwnerID,
 		"relay_http":  cfg.RelayHTTP,
 		"relay_ws":    cfg.RelayWS,
-		"relay_token": cfg.RelayToken,
+		"relay_token": relayToken,
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -297,6 +305,14 @@ func (s *Store) UpsertAgent(rec AgentRecord) error {
 	if err != nil {
 		return err
 	}
+	signingPrivateKey, err := secretstore.Protect("agent_signing_private_key:"+rec.Handle, rec.SigningPrivateKey)
+	if err != nil {
+		return err
+	}
+	encryptionPrivateKey, err := secretstore.Protect("agent_encryption_private_key:"+rec.Handle, rec.EncryptionPrivateKey)
+	if err != nil {
+		return err
+	}
 	_, err = s.db.Exec(
 		`INSERT INTO agents(handle, agent_id, owner_id, device_id, display_name, description, tagline, capabilities_json, public_profile, signing_public_key, signing_private_key, encryption_public_key, encryption_private_key, created_at, updated_at)
 		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -308,7 +324,7 @@ func (s *Store) UpsertAgent(rec AgentRecord) error {
 		  public_profile=excluded.public_profile,
 		  updated_at=excluded.updated_at`,
 		rec.Handle, rec.AgentID, rec.OwnerID, rec.DeviceID, rec.DisplayName, rec.Description, rec.Tagline, string(caps), boolInt(rec.PublicProfile),
-		rec.SigningPublicKey, rec.SigningPrivateKey, rec.EncryptionPublicKey, rec.EncryptionPrivateKey,
+		rec.SigningPublicKey, signingPrivateKey, rec.EncryptionPublicKey, encryptionPrivateKey,
 		rec.CreatedAt, time.Now().UTC().Format(time.RFC3339Nano),
 	)
 	return err
@@ -333,6 +349,14 @@ func (s *Store) Agent(handle string) (AgentRecord, error) {
 	if err := json.Unmarshal([]byte(caps), &rec.Capabilities); err != nil {
 		return AgentRecord{}, err
 	}
+	rec.SigningPrivateKey, err = secretstore.Unprotect(rec.SigningPrivateKey)
+	if err != nil {
+		return AgentRecord{}, err
+	}
+	rec.EncryptionPrivateKey, err = secretstore.Unprotect(rec.EncryptionPrivateKey)
+	if err != nil {
+		return AgentRecord{}, err
+	}
 	rec.PublicProfile = publicProfile != 0
 	return rec, nil
 }
@@ -342,20 +366,30 @@ func (s *Store) Agents() ([]AgentRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []AgentRecord
+	var handles []string
 	for rows.Next() {
 		var handle string
 		if err := rows.Scan(&handle); err != nil {
+			_ = rows.Close()
 			return nil, err
 		}
+		handles = append(handles, handle)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]AgentRecord, 0, len(handles))
+	for _, handle := range handles {
 		rec, err := s.Agent(handle)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, rec)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (a AgentRecord) Profile() protocol.AgentProfile {

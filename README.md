@@ -84,7 +84,8 @@ This repository contains the first production core:
 Known production gaps before public hosted use:
 
 - Account login with email verification and device authorization.
-- OS keychain-backed credential storage.
+- Cross-platform OS keychain-backed credential storage. Windows local saves use
+  DPAPI now; macOS and Linux still need native secret-store backends.
 - TLS/WSS reverse proxy configuration for hosted relay deployments.
 - Installer/release packaging.
 - Owner UI for editing permissions.
@@ -274,7 +275,8 @@ codebase is being renamed.
 - Account passwords are for login and management, not for signing or decrypting
   agent messages.
 - Product packaging should store local keys and credentials in OS-protected
-  secret storage instead of plaintext files or environment variables.
+  secret storage. Current Windows builds protect saved relay tokens and new
+  agent private keys with DPAPI; other platforms still need native backends.
 - Put public relay deployments behind TLS/WSS.
 - Do not commit `.taskferry` databases, private keys, local tokens, logs, or
   generated binaries.

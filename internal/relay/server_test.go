@@ -256,6 +256,47 @@ func TestInvitePageKeepsTaskFerryHref(t *testing.T) {
 	}
 }
 
+func TestOpsStatusRequiresTokenAndReturnsStats(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.CreateClient("Alice", "alice@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertAgent("client_a", "device_a", protocol.AgentProfile{
+		AgentID:       "agent_public",
+		Handle:        "@alice/worker",
+		DisplayName:   "Alice Worker",
+		PublicProfile: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(store, AuthConfig{OpsToken: "ops-secret"})
+
+	unauthorized := httptest.NewRequest(http.MethodGet, "/v1/ops/status", nil)
+	unauthorizedRecorder := httptest.NewRecorder()
+	s.handleOpsStatus(unauthorizedRecorder, unauthorized)
+	if unauthorizedRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorizedRecorder.Code)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/ops/status", nil)
+	req.Header.Set("Authorization", "Bearer ops-secret")
+	recorder := httptest.NewRecorder()
+	s.handleOpsStatus(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("ops status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{`"connected_clients":0`, `"clients":1`, `"agents":1`, `"public_agents":1`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("ops body missing %q: %s", expected, body)
+		}
+	}
+}
+
 func TestCommunityEmptyStateExplainsPublicAgentRequirement(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "relay.db"))
 	if err != nil {

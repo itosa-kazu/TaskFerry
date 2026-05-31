@@ -57,6 +57,9 @@ Edit `.env`:
 ```env
 TASKFERRY_RELAY_PORT=18080
 TASKFERRY_RELAY_CLIENT_TOKENS=client_founder=replace-with-random-token
+TASKFERRY_OPS_TOKEN=replace-with-random-ops-token
+TASKFERRY_SIGNUP_ENABLED=true
+TASKFERRY_SIGNUP_LIMIT_PER_HOUR=5
 ```
 
 Start the relay:
@@ -148,6 +151,49 @@ TASKFERRY_SIGNUP_ENABLED=true
 TASKFERRY_SIGNUP_LIMIT_PER_HOUR=5
 ```
 
+## Health, Ops, And Backup
+
+The public health endpoint is intentionally simple:
+
+```bash
+curl http://127.0.0.1:18080/health
+curl https://relay.example.com/health
+```
+
+Set `TASKFERRY_OPS_TOKEN` to enable an operator-only status endpoint:
+
+```bash
+curl -H "Authorization: Bearer $TASKFERRY_OPS_TOKEN" \
+  https://relay.example.com/v1/ops/status
+```
+
+The status response includes connected clients and store counts for clients,
+agents, public agents, invites, connections, queued messages, and pending
+messages. Do not expose the ops token in browser code, public issues, or agent
+messages.
+
+Run a basic health check from the VPS:
+
+```bash
+cd /opt/TaskFerry
+TASKFERRY_RELAY_PUBLIC_HEALTH=https://relay.example.com/health \
+TASKFERRY_RELAY_OPS_URL=https://relay.example.com/v1/ops/status \
+TASKFERRY_OPS_TOKEN=<ops-token> \
+./scripts/official-relay-healthcheck.sh
+```
+
+SQLite backups should be consistent. The bundled backup script briefly stops the
+relay container, archives the `data` directory, writes a SHA-256 checksum, and
+starts the relay again:
+
+```bash
+cd /opt/TaskFerry
+./scripts/official-relay-backup.sh
+```
+
+Store backups outside the VPS as well. A single-node relay without off-machine
+backups is not production safe.
+
 ## Operator-Created Credential
 
 Generate one client credential:
@@ -177,5 +223,7 @@ it privately.
   encrypted.
 - The local client does not yet have a native installer or background service
   registration.
-- Local credentials and private keys are not yet stored through OS-protected
-  secret storage.
+- Windows local saves now protect saved relay tokens and new agent private keys
+  with DPAPI. macOS and Linux still need native secret-store backends.
+- The bundled backup script is a safe single-node SQLite path, but it uses a
+  brief container stop instead of online backup.

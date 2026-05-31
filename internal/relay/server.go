@@ -32,6 +32,7 @@ type Server struct {
 type AuthConfig struct {
 	GlobalToken        string
 	ClientTokens       map[string]string
+	OpsToken           string
 	SignupDisabled     bool
 	SignupLimitPerHour int
 }
@@ -105,6 +106,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/agents/invite", s.handleAgentInvite)
 	mux.HandleFunc("GET /v1/directory", s.handleDirectory)
 	mux.HandleFunc("GET /v1/invites/", s.handleInviteResolve)
+	mux.HandleFunc("GET /v1/ops/status", s.handleOpsStatus)
 	mux.HandleFunc("GET /v1/ws", s.handleWebSocket)
 	return s.withCORS(mux)
 }
@@ -273,6 +275,36 @@ func (s *Server) relayURLs(r *http.Request) (string, string) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+func (s *Server) handleOpsStatus(w http.ResponseWriter, r *http.Request) {
+	if s.auth.OpsToken == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if !tokenEqual(normalizeToken(r.Header.Get("Authorization")), s.auth.OpsToken) && !tokenEqual(normalizeToken(r.URL.Query().Get("token")), s.auth.OpsToken) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	stats := StoreStats{}
+	if s.store != nil {
+		var err error
+		stats, err = s.store.Stats()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "stats_failed"})
+			return
+		}
+	}
+	s.mu.RLock()
+	connectedClients := len(s.sessions)
+	s.mu.RUnlock()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":                true,
+		"status":            "ok",
+		"connected_clients": connectedClients,
+		"store":             stats,
+		"generated_at":      time.Now().UTC().Format(time.RFC3339Nano),
+	})
 }
 
 func (s *Server) handleRegisterAgent(w http.ResponseWriter, r *http.Request) {

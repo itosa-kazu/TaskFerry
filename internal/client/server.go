@@ -358,11 +358,15 @@ func (s *Server) handleConnectSubmit(w http.ResponseWriter, r *http.Request) {
 	from := r.FormValue("from")
 	message := r.FormValue("message")
 	if from == "" {
-		data := s.connectPageData(r, inviteRaw, token, "Choose a local agent identity before connecting.")
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = connectTemplate.Execute(w, data)
-		return
+		agent, err := s.createAgentForConnect(r)
+		if err != nil {
+			data := s.connectPageData(r, inviteRaw, token, err.Error())
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = connectTemplate.Execute(w, data)
+			return
+		}
+		from = agent.Handle
 	}
 	if message == "" {
 		message = "Please connect for TaskFerry work."
@@ -422,11 +426,37 @@ func (s *Server) connectPageData(r *http.Request, inviteRaw string, token string
 	if s.localRequestAuthorized(r, token) {
 		if agents, err := s.store.Agents(); err == nil {
 			data["Agents"] = agents
+			data["HasAgents"] = len(agents) > 0
 		} else if pageError == "" {
 			data["Error"] = err.Error()
 		}
 	}
+	data["RelayConfigured"] = cfg.ClientID != "" && cfg.ClientID != "client_dev" && cfg.RelayToken != ""
+	data["SuggestedHandle"] = suggestedHandle("", firstNonEmpty(cfg.OwnerID, cfg.ClientID))
+	data["SuggestedDisplayName"] = firstNonEmpty(displayNameFromHandle(data["SuggestedHandle"].(string)), "My Agent")
+	data["SuggestedTagline"] = "Available for TaskFerry work."
+	data["SuggestedCapabilities"] = "code,review"
 	return data
+}
+
+func (s *Server) createAgentForConnect(r *http.Request) (AgentRecord, error) {
+	handle := strings.TrimSpace(r.FormValue("create_handle"))
+	if handle == "" {
+		return AgentRecord{}, errors.New("Choose an agent or create one before connecting.")
+	}
+	cfg := s.config()
+	displayName := firstNonEmpty(r.FormValue("create_display_name"), displayNameFromHandle(handle), handle)
+	tagline := firstNonEmpty(r.FormValue("create_tagline"), "Available for TaskFerry work.")
+	capabilities := parseCSV(firstNonEmpty(r.FormValue("create_capabilities"), "code,review"))
+	publicProfile := r.FormValue("create_public_profile") == "on"
+	agent, err := s.store.CreateAgent(handle, cfg.OwnerID, cfg.DeviceID, displayName, "", tagline, capabilities, publicProfile)
+	if err != nil {
+		return AgentRecord{}, err
+	}
+	if err := s.registerAgent(agent); err != nil {
+		s.store.Log("warn", "relay_register_failed", err.Error(), map[string]string{"handle": agent.Handle})
+	}
+	return agent, nil
 }
 
 func (s *Server) handleConnectionRequest(w http.ResponseWriter, r *http.Request) {
@@ -1153,6 +1183,27 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func displayNameFromHandle(handle string) string {
+	handle = strings.TrimSpace(handle)
+	if handle == "" {
+		return ""
+	}
+	parts := strings.Split(strings.TrimPrefix(handle, "@"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	name := strings.TrimSpace(parts[len(parts)-1])
+	if name == "" && len(parts) > 1 {
+		name = strings.TrimSpace(parts[0])
+	}
+	name = strings.ReplaceAll(name, "-", " ")
+	name = strings.ReplaceAll(name, "_", " ")
+	if name == "" {
+		return ""
+	}
+	return strings.ToUpper(name[:1]) + name[1:]
+}
+
 func suggestedHandle(ownerName string, clientID string) string {
 	base := strings.ToLower(strings.TrimSpace(ownerName))
 	if base == "" {
@@ -1383,6 +1434,8 @@ var connectTemplate = template.Must(template.New("connect").Parse(`<!doctype htm
       background: #fff;
     }
     textarea { min-height: 84px; resize: vertical; }
+    .check { display:flex; align-items:center; gap:8px; margin-top:14px; font-weight:700; }
+    .check input { width:auto; min-height:0; }
     button, .button {
       display: inline-flex;
       align-items: center;
@@ -1457,9 +1510,22 @@ var connectTemplate = template.Must(template.New("connect").Parse(`<!doctype htm
       <button type="submit">Send connection request</button>
       {{else}}
       {{if not .NeedsToken}}
-      <p class="muted">No local agent identities exist yet. Create one first from the local dashboard or CLI.</p>
+      <h2>Create your TaskFerry agent</h2>
+      <p class="muted">This local client does not have an agent yet. Create one here and use it for this connection request.</p>
+      {{if not .RelayConfigured}}
+      <p class="error">This local client is not configured for a relay account yet. Open your setup link first, then return to this invite.</p>
       {{end}}
-      <button type="submit">Continue</button>
+      <label for="create_handle">Continue as</label>
+      <input id="create_handle" name="create_handle" value="{{.SuggestedHandle}}" placeholder="@you/agent">
+      <label for="create_display_name">Display name</label>
+      <input id="create_display_name" name="create_display_name" value="{{.SuggestedDisplayName}}" placeholder="My Agent">
+      <label for="create_tagline">One-line intro</label>
+      <input id="create_tagline" name="create_tagline" value="{{.SuggestedTagline}}">
+      <label for="create_capabilities">Capabilities</label>
+      <input id="create_capabilities" name="create_capabilities" value="{{.SuggestedCapabilities}}" placeholder="code,review">
+      <label class="check"><input type="checkbox" name="create_public_profile"> List this agent publicly</label>
+      {{end}}
+      <button type="submit">Create agent and send request</button>
       {{end}}
     </form>
   </section>

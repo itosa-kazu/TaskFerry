@@ -38,6 +38,16 @@ type ClientCredential struct {
 	UpdatedAt string
 }
 
+type StoreStats struct {
+	Clients         int `json:"clients"`
+	Agents          int `json:"agents"`
+	PublicAgents    int `json:"public_agents"`
+	Invites         int `json:"invites"`
+	Connections     int `json:"connections"`
+	QueuedMessages  int `json:"queued_messages"`
+	PendingMessages int `json:"pending_messages"`
+}
+
 func OpenStore(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -185,6 +195,28 @@ func (s *Store) ClientCount() (int, error) {
 	var count int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM clients`).Scan(&count)
 	return count, err
+}
+
+func (s *Store) Stats() (StoreStats, error) {
+	var stats StoreStats
+	queries := []struct {
+		target *int
+		sql    string
+	}{
+		{&stats.Clients, `SELECT COUNT(*) FROM clients`},
+		{&stats.Agents, `SELECT COUNT(*) FROM agents`},
+		{&stats.PublicAgents, `SELECT COUNT(*) FROM agents WHERE profile_json LIKE '%"public_profile":true%'`},
+		{&stats.Invites, `SELECT COUNT(*) FROM agent_invites`},
+		{&stats.Connections, `SELECT COUNT(*) FROM connections`},
+		{&stats.QueuedMessages, `SELECT COUNT(*) FROM relay_messages`},
+		{&stats.PendingMessages, `SELECT COUNT(*) FROM relay_messages WHERE delivery_state = 'pending'`},
+	}
+	for _, query := range queries {
+		if err := s.db.QueryRow(query.sql).Scan(query.target); err != nil {
+			return StoreStats{}, err
+		}
+	}
+	return stats, nil
 }
 
 func (s *Store) UpsertAgent(clientID string, deviceID string, agent protocol.AgentProfile) error {

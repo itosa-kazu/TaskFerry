@@ -15,6 +15,7 @@ func main() {
 	addr := getenv("TASKFERRY_RELAY_ADDR", "AGENTCHAT_RELAY_ADDR", "127.0.0.1:8080")
 	dbPath := getenv("TASKFERRY_RELAY_DB", "AGENTCHAT_RELAY_DB", filepath.Join(".taskferry", "relay.db"))
 	token := getenv("TASKFERRY_RELAY_TOKEN", "AGENTCHAT_RELAY_TOKEN", "")
+	opsToken := getenv("TASKFERRY_OPS_TOKEN", "AGENTCHAT_OPS_TOKEN", "")
 	signupEnabled := getenvBool("TASKFERRY_SIGNUP_ENABLED", "AGENTCHAT_SIGNUP_ENABLED", true)
 	signupLimit := getenvInt("TASKFERRY_SIGNUP_LIMIT_PER_HOUR", "AGENTCHAT_SIGNUP_LIMIT_PER_HOUR", 5)
 	clientTokens, err := relay.ParseClientTokens(getenv("TASKFERRY_RELAY_CLIENT_TOKENS", "AGENTCHAT_RELAY_CLIENT_TOKENS", ""))
@@ -32,6 +33,7 @@ func main() {
 	server := relay.NewServer(store, relay.AuthConfig{
 		GlobalToken:        token,
 		ClientTokens:       clientTokens,
+		OpsToken:           opsToken,
 		SignupDisabled:     !signupEnabled,
 		SignupLimitPerHour: signupLimit,
 	})
