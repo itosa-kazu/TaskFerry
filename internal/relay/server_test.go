@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -88,6 +89,20 @@ func TestSignupCreatesClientCredential(t *testing.T) {
 	}
 }
 
+func TestSignupRejectsDuplicateEmail(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.CreateClient("Alice", "alice@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateClient("Alice Again", "ALICE@example.com"); !errors.Is(err, ErrEmailExists) {
+		t.Fatalf("expected ErrEmailExists, got %v", err)
+	}
+}
+
 func TestNormalizeSignupRequiresValidEmail(t *testing.T) {
 	owner, email, err := normalizeSignup("", "ALICE@example.com")
 	if err != nil {
@@ -98,6 +113,34 @@ func TestNormalizeSignupRequiresValidEmail(t *testing.T) {
 	}
 	if _, _, err := normalizeSignup("Alice", "not-an-email"); err == nil {
 		t.Fatal("expected invalid email error")
+	}
+}
+
+func TestSignupAPIReturnsConflictForDuplicateEmail(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	s := NewServer(store, AuthConfig{})
+
+	first := httptest.NewRequest(http.MethodPost, "/v1/signup", strings.NewReader(`{"owner_name":"Alice","email":"alice@example.com"}`))
+	first.RemoteAddr = "203.0.113.10:1234"
+	firstRecorder := httptest.NewRecorder()
+	s.handleSignupAPI(firstRecorder, first)
+	if firstRecorder.Code != http.StatusOK {
+		t.Fatalf("first signup status = %d body = %s", firstRecorder.Code, firstRecorder.Body.String())
+	}
+
+	second := httptest.NewRequest(http.MethodPost, "/v1/signup", strings.NewReader(`{"owner_name":"Alice Again","email":"ALICE@example.com"}`))
+	second.RemoteAddr = "203.0.113.11:1234"
+	secondRecorder := httptest.NewRecorder()
+	s.handleSignupAPI(secondRecorder, second)
+	if secondRecorder.Code != http.StatusConflict {
+		t.Fatalf("second signup status = %d body = %s", secondRecorder.Code, secondRecorder.Body.String())
+	}
+	if !strings.Contains(secondRecorder.Body.String(), "email_already_registered") {
+		t.Fatalf("duplicate signup body = %s", secondRecorder.Body.String())
 	}
 }
 

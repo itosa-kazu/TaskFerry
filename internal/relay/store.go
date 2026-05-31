@@ -80,6 +80,16 @@ func (s *Store) migrate() error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS client_emails (
+			email TEXT PRIMARY KEY,
+			client_id TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+		`INSERT OR IGNORE INTO client_emails(email, client_id, created_at)
+		 SELECT lower(email), client_id, created_at
+		 FROM clients
+		 WHERE trim(email) <> ''
+		 ORDER BY created_at`,
 		`CREATE TABLE IF NOT EXISTS agent_invites (
 			code TEXT PRIMARY KEY,
 			handle TEXT NOT NULL UNIQUE,
@@ -115,18 +125,46 @@ func (s *Store) migrate() error {
 }
 
 func (s *Store) CreateClient(ownerName string, email string) (ClientCredential, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for i := 0; i < 4; i++ {
 		clientID := protocol.NewID("client")
 		token := protocol.NewID("relay")
-		_, err := s.db.Exec(
+		tx, err := s.db.Begin()
+		if err != nil {
+			return ClientCredential{}, err
+		}
+		if email != "" {
+			var existing string
+			err = tx.QueryRow(`SELECT client_id FROM client_emails WHERE email = ?`, email).Scan(&existing)
+			if err == nil {
+				_ = tx.Rollback()
+				return ClientCredential{}, ErrEmailExists
+			}
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				_ = tx.Rollback()
+				return ClientCredential{}, err
+			}
+			if _, err := tx.Exec(
+				`INSERT INTO client_emails(email, client_id, created_at) VALUES(?, ?, ?)`,
+				email, clientID, now,
+			); err != nil {
+				_ = tx.Rollback()
+				return ClientCredential{}, ErrEmailExists
+			}
+		}
+		_, err = tx.Exec(
 			`INSERT INTO clients(client_id, token, owner_name, email, created_at, updated_at)
 			 VALUES(?, ?, ?, ?, ?, ?)`,
 			clientID, token, ownerName, email, now, now,
 		)
 		if err == nil {
+			if err := tx.Commit(); err != nil {
+				return ClientCredential{}, err
+			}
 			return ClientCredential{ClientID: clientID, Token: token, OwnerName: ownerName, Email: email, CreatedAt: now, UpdatedAt: now}, nil
 		}
+		_ = tx.Rollback()
 	}
 	return ClientCredential{}, errors.New("client_create_failed")
 }

@@ -101,7 +101,7 @@ Users can open:
 https://relay.example.com/signup
 ```
 
-The page requires an email address, creates a `client_id`, shows the
+The page requires a unique email address, creates a `client_id`, shows the
 `relay_token` once with copy buttons, and exposes a `taskferry://.../setup`
 deep link for the local client. API clients can call:
 
@@ -112,6 +112,7 @@ curl -X POST https://relay.example.com/v1/signup \
 ```
 
 The relay token is a secret; users should save it locally.
+Duplicate email signup returns `409 email_already_registered`.
 
 Signup itself does not create a public community listing. The setup link opens
 the local client setup page where the user can save the relay credential and

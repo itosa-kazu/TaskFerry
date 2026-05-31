@@ -161,6 +161,11 @@ func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request) {
 		}
 		cred, err := s.store.CreateClient(ownerName, email)
 		if err != nil {
+			if errors.Is(err, ErrEmailExists) {
+				w.WriteHeader(http.StatusConflict)
+				_ = signupTemplate.Execute(w, map[string]any{"Error": "That email already has a relay account. Use the setup link from the first signup, or contact the relay operator to recover access.", "RelayHTTP": relayHTTP, "RelayWS": relayWS, "OwnerName": ownerName, "Email": email})
+				return
+			}
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = signupTemplate.Execute(w, map[string]any{"Error": "Could not create relay credential.", "RelayHTTP": relayHTTP, "RelayWS": relayWS})
 			return
@@ -200,6 +205,10 @@ func (s *Server) handleSignupAPI(w http.ResponseWriter, r *http.Request) {
 	relayHTTP, relayWS := s.relayURLs(r)
 	cred, err := s.store.CreateClient(ownerName, email)
 	if err != nil {
+		if errors.Is(err, ErrEmailExists) {
+			writeJSON(w, http.StatusConflict, protocol.SignupResponse{OK: false, Error: "email_already_registered", SetupHint: "That email already has a relay account. Use the setup link from the first signup, or contact the relay operator to recover access."})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, protocol.SignupResponse{OK: false, Error: "signup_failed"})
 		return
 	}

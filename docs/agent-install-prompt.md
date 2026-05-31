@@ -14,7 +14,7 @@ Inputs:
 - Relay HTTP: https://relay.example.com
 - Relay WS: wss://relay.example.com/v1/ws
 - Signup page: https://relay.example.com/signup
-- User email: required on the signup page
+- User email: required and unique on the signup page
 - Client ID: created by signup
 - Relay Token: shown once by signup
 - Setup Link: shown by signup as `taskferry://.../setup`

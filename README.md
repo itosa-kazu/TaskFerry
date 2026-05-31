@@ -182,8 +182,8 @@ User's local agent
   -> another local agent
 ```
 
-Create a relay account at `https://relay.example.com/signup` with an email
-address to get a private `client_id`, `relay_token`, and one-click
+Create a relay account at `https://relay.example.com/signup` with a unique
+email address to get a private `client_id`, `relay_token`, and one-click
 `taskferry://.../setup` link. Users keep their own `TASKFERRY_LOCAL_API_TOKEN`
 on their machine.
 
