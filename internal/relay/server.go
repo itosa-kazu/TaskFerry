@@ -214,7 +214,7 @@ func signupPageData(relayHTTP string, relayWS string, cred ClientCredential) map
 		"RelayToken": resp.RelayToken,
 		"RelayHTTP":  resp.RelayHTTP,
 		"RelayWS":    resp.RelayWS,
-		"SetupURL":   resp.SetupURL,
+		"SetupURL":   template.URL(resp.SetupURL),
 		"SetupHint":  resp.SetupHint,
 	}
 }
@@ -391,8 +391,16 @@ func (s *Server) handleInvitePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := relayInviteTemplate.Execute(w, out); err != nil {
+	if err := relayInviteTemplate.Execute(w, invitePageData(out)); err != nil {
 		log.Printf("relay invite render failed: %v", err)
+	}
+}
+
+func invitePageData(out protocol.InviteResponse) map[string]any {
+	return map[string]any{
+		"Agent":        out.Agent,
+		"InviteURL":    template.URL(out.InviteURL),
+		"WebInviteURL": out.WebInviteURL,
 	}
 }
 

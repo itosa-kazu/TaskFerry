@@ -156,13 +156,53 @@ func TestSignupPageRendersCopyControls(t *testing.T) {
 		t.Fatalf("signup status = %d body = %s", recorder.Code, recorder.Body.String())
 	}
 	body := recorder.Body.String()
-	for _, expected := range []string{`data-copy="#client-id"`, `data-copy="#relay-token"`, `data-copy="#config-block"`, `data-copy="#install-prompt"`, `<textarea id="config-block"`, `taskferry://example.com/setup`, `Open TaskFerry setup`} {
+	for _, expected := range []string{`data-copy="#client-id"`, `data-copy="#relay-token"`, `data-copy="#config-block"`, `data-copy="#install-prompt"`, `<textarea id="config-block"`, `href="taskferry://example.com/setup?`, `taskferry://example.com/setup`, `Open TaskFerry setup`} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("signup page missing %q", expected)
 		}
 	}
+	if strings.Contains(body, "#ZgotmplZ") {
+		t.Fatalf("signup setup href was sanitized: %s", body)
+	}
 	if !strings.Contains(body, "one-click local setup") {
 		t.Fatalf("signup page does not explain one-click local setup")
+	}
+}
+
+func TestInvitePageKeepsTaskFerryHref(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	agent := protocol.AgentProfile{
+		AgentID:       "agent_public",
+		Handle:        "@alice/worker",
+		DisplayName:   "Alice Worker",
+		Tagline:       "Writes short technical drafts",
+		Capabilities:  []string{"writing", "review"},
+		PublicProfile: true,
+	}
+	if err := store.UpsertAgent("client_a", "device_a", agent); err != nil {
+		t.Fatal(err)
+	}
+	invite, err := store.InviteByHandle("@alice/worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(store, AuthConfig{})
+	req := httptest.NewRequest(http.MethodGet, "/invite/"+invite.Code, nil)
+	recorder := httptest.NewRecorder()
+	s.handleInvitePage(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("invite status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `href="taskferry://example.com/invite/`) {
+		t.Fatalf("invite page missing taskferry href: %s", body)
+	}
+	if strings.Contains(body, "#ZgotmplZ") {
+		t.Fatalf("invite href was sanitized: %s", body)
 	}
 }
 
