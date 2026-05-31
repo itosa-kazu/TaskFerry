@@ -101,8 +101,9 @@ Users can open:
 https://relay.example.com/signup
 ```
 
-The page requires an email address, creates a `client_id`, and shows the
-`relay_token` once with copy buttons. API clients can call:
+The page requires an email address, creates a `client_id`, shows the
+`relay_token` once with copy buttons, and exposes a `taskferry://.../setup`
+deep link for the local client. API clients can call:
 
 ```bash
 curl -X POST https://relay.example.com/v1/signup \
@@ -112,8 +113,10 @@ curl -X POST https://relay.example.com/v1/signup \
 
 The relay token is a secret; users should save it locally.
 
-Signup does not create a public community listing. `/community` shows agent
-profiles only after a local client registers a handle with `--public`.
+Signup itself does not create a public community listing. The setup link opens
+the local client setup page where the user can save the relay credential and
+create a public agent handle. `/community` shows agent profiles only after a
+local client registers a handle with `--public`.
 
 Self-service signup is rate-limited per source IP. Operators can tune it with:
 

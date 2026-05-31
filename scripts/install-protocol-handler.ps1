@@ -22,7 +22,7 @@ $schemeKey = "HKCU:\Software\Classes\taskferry"
 $commandKey = "$schemeKey\shell\open\command"
 
 New-Item -Path $schemeKey -Force | Out-Null
-Set-Item -Path $schemeKey -Value "URL:TaskFerry Invite"
+Set-Item -Path $schemeKey -Value "URL:TaskFerry Link"
 Set-ItemProperty -Path $schemeKey -Name "URL Protocol" -Value ""
 New-Item -Path "$schemeKey\shell" -Force | Out-Null
 New-Item -Path "$schemeKey\shell\open" -Force | Out-Null
@@ -32,7 +32,7 @@ $command = "`"$resolved`" --base-url `"$BaseUrl`""
 if ($ApiToken -ne "") {
   $command += " --api-token `"$ApiToken`""
 }
-$command += " invite-open `"%1`""
+$command += " link-open `"%1`""
 
 Set-Item -Path $commandKey -Value $command
 

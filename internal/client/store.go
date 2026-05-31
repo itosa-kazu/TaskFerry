@@ -136,6 +136,11 @@ func (s *Store) migrate() error {
 			data_json TEXT NOT NULL,
 			created_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -149,6 +154,67 @@ func (s *Store) migrate() error {
 		return err
 	}
 	return nil
+}
+
+func (s *Store) SavedRelayConfig() (Config, error) {
+	rows, err := s.db.Query(`SELECT key, value FROM settings WHERE key IN ('client_id', 'device_id', 'owner_id', 'relay_http', 'relay_ws', 'relay_token')`)
+	if err != nil {
+		return Config{}, err
+	}
+	defer rows.Close()
+	cfg := Config{}
+	for rows.Next() {
+		var key string
+		var value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return Config{}, err
+		}
+		switch key {
+		case "client_id":
+			cfg.ClientID = value
+		case "device_id":
+			cfg.DeviceID = value
+		case "owner_id":
+			cfg.OwnerID = value
+		case "relay_http":
+			cfg.RelayHTTP = value
+		case "relay_ws":
+			cfg.RelayWS = value
+		case "relay_token":
+			cfg.RelayToken = value
+		}
+	}
+	return cfg, rows.Err()
+}
+
+func (s *Store) SaveRelayConfig(cfg Config) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	values := map[string]string{
+		"client_id":   cfg.ClientID,
+		"device_id":   cfg.DeviceID,
+		"owner_id":    cfg.OwnerID,
+		"relay_http":  cfg.RelayHTTP,
+		"relay_ws":    cfg.RelayWS,
+		"relay_token": cfg.RelayToken,
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for key, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO settings(key, value, updated_at) VALUES(?, ?, ?)
+			 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+			key, value, now,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ensureColumn(table string, column string, spec string) error {

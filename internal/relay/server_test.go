@@ -156,13 +156,13 @@ func TestSignupPageRendersCopyControls(t *testing.T) {
 		t.Fatalf("signup status = %d body = %s", recorder.Code, recorder.Body.String())
 	}
 	body := recorder.Body.String()
-	for _, expected := range []string{`data-copy="#client-id"`, `data-copy="#relay-token"`, `data-copy="#config-block"`, `<textarea id="config-block"`} {
+	for _, expected := range []string{`data-copy="#client-id"`, `data-copy="#relay-token"`, `data-copy="#config-block"`, `data-copy="#install-prompt"`, `<textarea id="config-block"`, `taskferry://example.com/setup`, `Open TaskFerry setup`} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("signup page missing %q", expected)
 		}
 	}
-	if !strings.Contains(body, "This signup created a private relay account") {
-		t.Fatalf("signup page does not explain public profile next step")
+	if !strings.Contains(body, "one-click local setup") {
+		t.Fatalf("signup page does not explain one-click local setup")
 	}
 }
 

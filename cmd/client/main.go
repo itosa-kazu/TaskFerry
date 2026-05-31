@@ -29,6 +29,11 @@ func main() {
 		log.Fatal(err)
 	}
 	defer store.Close()
+	if saved, err := store.SavedRelayConfig(); err == nil {
+		cfg = applySavedRelayConfig(cfg, saved)
+	} else {
+		log.Printf("could not load saved relay config: %v", err)
+	}
 	server := client.NewServer(cfg, store)
 	server.StartRelayLoop()
 	log.Printf("taskferry local client listening on %s", cfg.Addr)
@@ -43,4 +48,36 @@ func getenv(primary string, legacy string, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envSet(primary string, legacy string) bool {
+	if _, ok := os.LookupEnv(primary); ok {
+		return true
+	}
+	if _, ok := os.LookupEnv(legacy); ok {
+		return true
+	}
+	return false
+}
+
+func applySavedRelayConfig(cfg client.Config, saved client.Config) client.Config {
+	if saved.ClientID != "" && !envSet("TASKFERRY_CLIENT_ID", "AGENTCHAT_CLIENT_ID") {
+		cfg.ClientID = saved.ClientID
+	}
+	if saved.DeviceID != "" && !envSet("TASKFERRY_DEVICE_ID", "AGENTCHAT_DEVICE_ID") {
+		cfg.DeviceID = saved.DeviceID
+	}
+	if saved.OwnerID != "" && !envSet("TASKFERRY_OWNER_ID", "AGENTCHAT_OWNER_ID") {
+		cfg.OwnerID = saved.OwnerID
+	}
+	if saved.RelayHTTP != "" && !envSet("TASKFERRY_RELAY_HTTP", "AGENTCHAT_RELAY_HTTP") {
+		cfg.RelayHTTP = saved.RelayHTTP
+	}
+	if saved.RelayWS != "" && !envSet("TASKFERRY_RELAY_WS", "AGENTCHAT_RELAY_WS") {
+		cfg.RelayWS = saved.RelayWS
+	}
+	if saved.RelayToken != "" && !envSet("TASKFERRY_RELAY_TOKEN", "AGENTCHAT_RELAY_TOKEN") {
+		cfg.RelayToken = saved.RelayToken
+	}
+	return cfg
 }

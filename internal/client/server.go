@@ -35,6 +35,7 @@ type Server struct {
 	store          *Store
 	httpClient     *http.Client
 	relaySend      chan protocol.RelayFrame
+	relayReset     chan struct{}
 	relayConnected bool
 	mu             sync.RWMutex
 }
@@ -45,6 +46,7 @@ func NewServer(cfg Config, store *Store) *Server {
 		store:      store,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		relaySend:  make(chan protocol.RelayFrame, 512),
+		relayReset: make(chan struct{}, 1),
 	}
 }
 
@@ -58,6 +60,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /", s.handleDashboard)
 	mux.HandleFunc("GET /agents", s.handleAgents)
 	mux.HandleFunc("POST /agents", s.handleCreateAgent)
+	mux.HandleFunc("GET /setup", s.handleSetupPage)
+	mux.HandleFunc("POST /setup", s.handleSetupPage)
 	mux.HandleFunc("GET /invites", s.handleInviteForAgent)
 	mux.HandleFunc("GET /connect", s.handleConnectPage)
 	mux.HandleFunc("POST /connect", s.handleConnectPage)
@@ -76,11 +80,12 @@ func (s *Server) Routes() http.Handler {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	relayConnected := s.relayConnected
+	cfg := s.cfg
 	s.mu.RUnlock()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":          "ok",
-		"client_id":       s.cfg.ClientID,
-		"device_id":       s.cfg.DeviceID,
+		"client_id":       cfg.ClientID,
+		"device_id":       cfg.DeviceID,
 		"relay_connected": relayConnected,
 	})
 }
@@ -91,11 +96,12 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse("invalid_json"))
 		return
 	}
+	cfg := s.config()
 	ownerID := req.OwnerID
 	if ownerID == "" {
-		ownerID = s.cfg.OwnerID
+		ownerID = cfg.OwnerID
 	}
-	rec, err := s.store.CreateAgent(req.Handle, ownerID, s.cfg.DeviceID, req.DisplayName, req.Description, req.Tagline, req.Capabilities, req.PublicProfile)
+	rec, err := s.store.CreateAgent(req.Handle, ownerID, cfg.DeviceID, req.DisplayName, req.Description, req.Tagline, req.Capabilities, req.PublicProfile)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse(err.Error()))
 		return
@@ -121,6 +127,154 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		profiles = append(profiles, agent.Profile())
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"agents": profiles})
+}
+
+func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		s.handleSetupSubmit(w, r)
+		return
+	}
+	data := s.setupPageData(r, "", nil)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := setupTemplate.Execute(w, data); err != nil {
+		log.Printf("setup page render failed: %v", err)
+	}
+}
+
+func (s *Server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	token := r.FormValue("token")
+	if token == "" {
+		token = localTokenFromRequest(r)
+	}
+	if !s.localRequestAuthorized(r, token) {
+		data := s.setupPageData(r, "Local API token is required before setup can change this client.", nil)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = setupTemplate.Execute(w, data)
+		return
+	}
+
+	cfg, err := s.setupConfigFromRequest(r)
+	if err != nil {
+		data := s.setupPageData(r, err.Error(), nil)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = setupTemplate.Execute(w, data)
+		return
+	}
+	if err := s.store.SaveRelayConfig(cfg); err != nil {
+		data := s.setupPageData(r, "Could not save local relay config.", nil)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = setupTemplate.Execute(w, data)
+		return
+	}
+	s.applyConfig(cfg)
+
+	handle := strings.TrimSpace(r.FormValue("handle"))
+	displayName := strings.TrimSpace(r.FormValue("display_name"))
+	tagline := strings.TrimSpace(r.FormValue("tagline"))
+	capabilities := parseCSV(r.FormValue("capabilities"))
+	publicProfile := r.FormValue("public_profile") == "on"
+	var agent AgentRecord
+	var invite protocol.InviteResponse
+	var warnings []string
+	if handle != "" {
+		if displayName == "" {
+			displayName = handle
+		}
+		agent, err = s.store.CreateAgent(handle, cfg.OwnerID, cfg.DeviceID, displayName, "", tagline, capabilities, publicProfile)
+		if err != nil {
+			data := s.setupPageData(r, err.Error(), nil)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = setupTemplate.Execute(w, data)
+			return
+		}
+		if err := s.registerAgent(agent); err != nil {
+			warnings = append(warnings, "Agent was created locally, but relay registration will retry when the relay connection is ready.")
+			s.store.Log("warn", "relay_register_failed", err.Error(), map[string]string{"handle": agent.Handle})
+		} else if publicProfile {
+			if out, err := s.fetchAgentInvite(agent.Handle); err == nil {
+				invite = out
+			} else {
+				warnings = append(warnings, "Agent was registered, but invite lookup failed. Use invite-show after the relay reconnects.")
+			}
+		}
+	}
+
+	data := s.setupPageData(r, "", warnings)
+	data["Saved"] = true
+	data["Agent"] = agent
+	data["HasAgent"] = agent.Handle != ""
+	data["InviteURL"] = invite.InviteURL
+	data["WebInviteURL"] = invite.WebInviteURL
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := setupTemplate.Execute(w, data); err != nil {
+		log.Printf("setup page render failed: %v", err)
+	}
+}
+
+func (s *Server) setupConfigFromRequest(r *http.Request) (Config, error) {
+	current := s.config()
+	cfg := current
+	cfg.ClientID = strings.TrimSpace(r.FormValue("client_id"))
+	cfg.RelayToken = strings.TrimSpace(r.FormValue("relay_token"))
+	cfg.RelayHTTP = strings.TrimRight(strings.TrimSpace(r.FormValue("relay_http")), "/")
+	cfg.RelayWS = strings.TrimSpace(r.FormValue("relay_ws"))
+	if cfg.ClientID == "" || cfg.RelayToken == "" || cfg.RelayHTTP == "" || cfg.RelayWS == "" {
+		return Config{}, errors.New("Relay setup link is missing client_id, relay_token, relay_http, or relay_ws.")
+	}
+	if _, err := url.ParseRequestURI(cfg.RelayHTTP); err != nil {
+		return Config{}, errors.New("Relay HTTP URL is invalid.")
+	}
+	if _, err := url.ParseRequestURI(cfg.RelayWS); err != nil {
+		return Config{}, errors.New("Relay WebSocket URL is invalid.")
+	}
+	if cfg.DeviceID == "" || cfg.DeviceID == "device_dev" {
+		cfg.DeviceID = protocol.NewID("device")
+	}
+	cfg.OwnerID = cfg.ClientID
+	return cfg, nil
+}
+
+func (s *Server) setupPageData(r *http.Request, pageError string, warnings []string) map[string]any {
+	cfg := s.config()
+	token := r.FormValue("token")
+	if token == "" {
+		token = localTokenFromRequest(r)
+	}
+	handle := r.FormValue("handle")
+	if handle == "" {
+		handle = suggestedHandle(r.FormValue("owner_name"), r.FormValue("client_id"))
+	}
+	publicProfile := true
+	if r.Method == http.MethodPost {
+		publicProfile = r.FormValue("public_profile") == "on"
+	} else if r.FormValue("public") == "false" {
+		publicProfile = false
+	}
+	data := map[string]any{
+		"ClientID":        firstNonEmpty(r.FormValue("client_id"), cfg.ClientID),
+		"RelayToken":      firstNonEmpty(r.FormValue("relay_token"), cfg.RelayToken),
+		"RelayHTTP":       firstNonEmpty(r.FormValue("relay_http"), cfg.RelayHTTP),
+		"RelayWS":         firstNonEmpty(r.FormValue("relay_ws"), cfg.RelayWS),
+		"Handle":          handle,
+		"DisplayName":     firstNonEmpty(r.FormValue("display_name"), r.FormValue("owner_name")),
+		"Tagline":         firstNonEmpty(r.FormValue("tagline"), "Available for TaskFerry work."),
+		"Capabilities":    firstNonEmpty(r.FormValue("capabilities"), "code,review"),
+		"PublicProfile":   publicProfile,
+		"Token":           token,
+		"NeedsToken":      cfg.LocalAPIToken != "" && !s.localRequestAuthorized(r, token),
+		"Error":           pageError,
+		"Warnings":        warnings,
+		"RelayConfigured": cfg.ClientID != "" && cfg.ClientID != "client_dev",
+	}
+	return data
 }
 
 func (s *Server) handleInviteForAgent(w http.ResponseWriter, r *http.Request) {
@@ -249,10 +403,11 @@ func (s *Server) handleConnectSubmit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) connectPageData(r *http.Request, inviteRaw string, token string, pageError string) map[string]any {
+	cfg := s.config()
 	data := map[string]any{
 		"InviteRaw":  inviteRaw,
 		"Token":      token,
-		"NeedsToken": s.cfg.LocalAPIToken != "" && !s.localRequestAuthorized(r, token),
+		"NeedsToken": cfg.LocalAPIToken != "" && !s.localRequestAuthorized(r, token),
 		"Error":      pageError,
 		"Message":    "Please connect for TaskFerry work.",
 	}
@@ -472,6 +627,7 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sendTyped(from string, to []string, msgType protocol.MessageType, payload any, conversationID string, taskID string) (string, error) {
+	cfg := s.config()
 	if len(to) != 1 {
 		return "", errors.New("only_one_recipient_supported_in_core")
 	}
@@ -490,8 +646,8 @@ func (s *Server) sendTyped(from string, to []string, msgType protocol.MessageTyp
 	env := protocol.NewEnvelope(msgType, from, to, encrypted)
 	env.ConversationID = conversationID
 	env.TaskID = taskID
-	env.Metadata["client_id"] = s.cfg.ClientID
-	env.Metadata["device_id"] = s.cfg.DeviceID
+	env.Metadata["client_id"] = cfg.ClientID
+	env.Metadata["device_id"] = cfg.DeviceID
 	env.SigningKeyID = fromAgent.Handle
 	if err := protocol.SignEnvelope(&env, fromAgent.SigningPrivateKey); err != nil {
 		return "", err
@@ -515,14 +671,15 @@ func (s *Server) relayLoop() {
 }
 
 func (s *Server) connectRelayOnce() error {
-	u, err := url.Parse(s.cfg.RelayWS)
+	cfg := s.config()
+	u, err := url.Parse(cfg.RelayWS)
 	if err != nil {
 		return err
 	}
 	q := u.Query()
-	q.Set("client_id", s.cfg.ClientID)
-	if s.cfg.RelayToken != "" {
-		q.Set("token", s.cfg.RelayToken)
+	q.Set("client_id", cfg.ClientID)
+	if cfg.RelayToken != "" {
+		q.Set("token", cfg.RelayToken)
 	}
 	u.RawQuery = q.Encode()
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
@@ -545,6 +702,8 @@ func (s *Server) connectRelayOnce() error {
 			}
 		case err := <-done:
 			return err
+		case <-s.relayReset:
+			return errors.New("relay_config_changed")
 		}
 	}
 }
@@ -679,19 +838,20 @@ func (s *Server) registerAllAgents() error {
 }
 
 func (s *Server) registerAgent(agent AgentRecord) error {
-	req := protocol.RegisterAgentRequest{ClientID: s.cfg.ClientID, DeviceID: s.cfg.DeviceID, Agent: agent.Profile()}
+	cfg := s.config()
+	req := protocol.RegisterAgentRequest{ClientID: cfg.ClientID, DeviceID: cfg.DeviceID, Agent: agent.Profile()}
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(req); err != nil {
 		return err
 	}
-	httpReq, err := http.NewRequest(http.MethodPost, strings.TrimRight(s.cfg.RelayHTTP, "/")+"/v1/agents/register", &buf)
+	httpReq, err := http.NewRequest(http.MethodPost, strings.TrimRight(cfg.RelayHTTP, "/")+"/v1/agents/register", &buf)
 	if err != nil {
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-TaskFerry-Client-ID", s.cfg.ClientID)
-	if s.cfg.RelayToken != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+s.cfg.RelayToken)
+	httpReq.Header.Set("X-TaskFerry-Client-ID", cfg.ClientID)
+	if cfg.RelayToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+cfg.RelayToken)
 	}
 	resp, err := s.httpClient.Do(httpReq)
 	if err != nil {
@@ -705,15 +865,16 @@ func (s *Server) registerAgent(agent AgentRecord) error {
 }
 
 func (s *Server) resolveAgent(handle string) (protocol.AgentProfile, error) {
-	u := strings.TrimRight(s.cfg.RelayHTTP, "/") + "/v1/agents/resolve?handle=" + url.QueryEscape(handle)
+	cfg := s.config()
+	u := strings.TrimRight(cfg.RelayHTTP, "/") + "/v1/agents/resolve?handle=" + url.QueryEscape(handle)
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return protocol.AgentProfile{}, err
 	}
-	if s.cfg.RelayToken != "" {
-		req.Header.Set("Authorization", "Bearer "+s.cfg.RelayToken)
+	if cfg.RelayToken != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.RelayToken)
 	}
-	req.Header.Set("X-TaskFerry-Client-ID", s.cfg.ClientID)
+	req.Header.Set("X-TaskFerry-Client-ID", cfg.ClientID)
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return protocol.AgentProfile{}, err
@@ -733,14 +894,15 @@ func (s *Server) resolveAgent(handle string) (protocol.AgentProfile, error) {
 }
 
 func (s *Server) fetchAgentInvite(handle string) (protocol.InviteResponse, error) {
-	u := strings.TrimRight(s.cfg.RelayHTTP, "/") + "/v1/agents/invite?handle=" + url.QueryEscape(handle)
+	cfg := s.config()
+	u := strings.TrimRight(cfg.RelayHTTP, "/") + "/v1/agents/invite?handle=" + url.QueryEscape(handle)
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return protocol.InviteResponse{}, err
 	}
-	req.Header.Set("X-TaskFerry-Client-ID", s.cfg.ClientID)
-	if s.cfg.RelayToken != "" {
-		req.Header.Set("Authorization", "Bearer "+s.cfg.RelayToken)
+	req.Header.Set("X-TaskFerry-Client-ID", cfg.ClientID)
+	if cfg.RelayToken != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.RelayToken)
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -788,12 +950,13 @@ func (s *Server) resolveInvite(rawInvite string) (protocol.InviteResponse, error
 }
 
 func (s *Server) inviteResolveEndpoint(rawInvite string) (string, error) {
+	cfg := s.config()
 	rawInvite = strings.TrimSpace(rawInvite)
 	if rawInvite == "" {
 		return "", errors.New("missing_invite")
 	}
 	if !strings.Contains(rawInvite, "://") {
-		return strings.TrimRight(s.cfg.RelayHTTP, "/") + "/v1/invites/" + url.PathEscape(rawInvite), nil
+		return strings.TrimRight(cfg.RelayHTTP, "/") + "/v1/invites/" + url.PathEscape(rawInvite), nil
 	}
 	inviteURL, err := url.Parse(rawInvite)
 	if err != nil {
@@ -818,7 +981,7 @@ func (s *Server) inviteResolveEndpoint(rawInvite string) (string, error) {
 	if host == "" || code == "" {
 		return "", errors.New("invalid_invite_url")
 	}
-	relayURL, err := url.Parse(s.cfg.RelayHTTP)
+	relayURL, err := url.Parse(cfg.RelayHTTP)
 	if err != nil {
 		return "", err
 	}
@@ -829,7 +992,7 @@ func (s *Server) inviteResolveEndpoint(rawInvite string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(s.cfg.RelayHTTP, "/") + "/v1/invites/" + url.PathEscape(code), nil
+	return strings.TrimRight(cfg.RelayHTTP, "/") + "/v1/invites/" + url.PathEscape(code), nil
 }
 
 func (s *Server) setRelayConnected(value bool) {
@@ -838,16 +1001,34 @@ func (s *Server) setRelayConnected(value bool) {
 	s.relayConnected = value
 }
 
+func (s *Server) config() Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg
+}
+
+func (s *Server) applyConfig(cfg Config) {
+	s.mu.Lock()
+	s.cfg = cfg
+	s.relayConnected = false
+	s.mu.Unlock()
+	select {
+	case s.relayReset <- struct{}{}:
+	default:
+	}
+}
+
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	agents, _ := s.store.Agents()
 	messages, _ := s.store.RecentMessages(20)
 	tasks, _ := s.store.Tasks(20)
 	s.mu.RLock()
 	relayConnected := s.relayConnected
+	cfg := s.cfg
 	s.mu.RUnlock()
 	data := map[string]any{
-		"ClientID":       s.cfg.ClientID,
-		"DeviceID":       s.cfg.DeviceID,
+		"ClientID":       cfg.ClientID,
+		"DeviceID":       cfg.DeviceID,
 		"RelayConnected": relayConnected,
 		"Agents":         agents,
 		"Messages":       messages,
@@ -886,7 +1067,8 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 
 func (s *Server) withLocalAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.LocalAPIToken == "" || r.URL.Path == "/health" || r.URL.Path == "/connect" {
+		cfg := s.config()
+		if cfg.LocalAPIToken == "" || r.URL.Path == "/health" || r.URL.Path == "/connect" || r.URL.Path == "/setup" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -899,13 +1081,14 @@ func (s *Server) withLocalAuth(next http.Handler) http.Handler {
 }
 
 func (s *Server) localRequestAuthorized(r *http.Request, explicitToken string) bool {
-	if s.cfg.LocalAPIToken == "" {
+	cfg := s.config()
+	if cfg.LocalAPIToken == "" {
 		return true
 	}
-	return tokenOK(explicitToken, s.cfg.LocalAPIToken) ||
-		tokenOK(r.Header.Get("Authorization"), s.cfg.LocalAPIToken) ||
-		tokenOK(r.Header.Get("X-TaskFerry-Local-Token"), s.cfg.LocalAPIToken) ||
-		tokenOK(r.URL.Query().Get("token"), s.cfg.LocalAPIToken)
+	return tokenOK(explicitToken, cfg.LocalAPIToken) ||
+		tokenOK(r.Header.Get("Authorization"), cfg.LocalAPIToken) ||
+		tokenOK(r.Header.Get("X-TaskFerry-Local-Token"), cfg.LocalAPIToken) ||
+		tokenOK(r.URL.Query().Get("token"), cfg.LocalAPIToken)
 }
 
 func localTokenFromRequest(r *http.Request) string {
@@ -944,6 +1127,51 @@ func errorResponse(code string) map[string]any {
 
 func acceptsHTML(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
+func parseCSV(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func suggestedHandle(ownerName string, clientID string) string {
+	base := strings.ToLower(strings.TrimSpace(ownerName))
+	if base == "" {
+		base = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(clientID)), "client_")
+	}
+	var b strings.Builder
+	for _, r := range base {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	slug := strings.Trim(b.String(), "-_")
+	if slug == "" {
+		slug = "you"
+	}
+	if len(slug) > 24 {
+		slug = slug[:24]
+	}
+	return "@" + slug + "/agent"
 }
 
 var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!doctype html>
@@ -985,6 +1213,134 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!doctype
   <table><tr><th>Time</th><th>Direction</th><th>Type</th><th>From</th><th>To</th><th>Task</th><th>Payload</th></tr>
   {{range .Messages}}<tr><td>{{.CreatedAt}}</td><td>{{.Direction}}</td><td>{{.Type}}</td><td><code>{{.Sender}}</code></td><td>{{range .Recipients}}<code>{{.}}</code> {{end}}</td><td><code>{{.TaskID}}</code></td><td><pre>{{printf "%s" .Plaintext}}</pre></td></tr>{{end}}
   </table>
+</main>
+</body>
+</html>`))
+
+var setupTemplate = template.Must(template.New("setup").Parse(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>TaskFerry Setup</title>
+  <style>
+    :root { --ink:#171915; --muted:#5f675a; --paper:#fbfaf4; --panel:#fff; --line:#d9decf; --green:#b9f04a; --red:#a6362f; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        linear-gradient(90deg, rgba(23,25,21,.045) 1px, transparent 1px) 0 0 / 32px 32px,
+        linear-gradient(rgba(23,25,21,.035) 1px, transparent 1px) 0 0 / 32px 32px,
+        var(--paper);
+      color: var(--ink);
+      font-family: "Segoe UI", system-ui, sans-serif;
+    }
+    main { max-width: 900px; margin: 0 auto; padding: 36px 20px 70px; }
+    h1 { font-family: Georgia, "Times New Roman", serif; font-size: 56px; line-height: .95; margin: 0 0 18px; }
+    h2 { font-size: 20px; margin: 0 0 12px; }
+    .lead, .muted { color: var(--muted); line-height: 1.5; }
+    .panel { background: rgba(255,255,255,.88); border: 1px solid var(--line); border-radius: 8px; padding: 18px; margin: 18px 0; }
+    .success { border-color: #89b84f; background: #f3ffe2; }
+    .error { color: var(--red); font-weight: 700; }
+    .warning { color: #8a5a00; font-weight: 700; }
+    label { display:block; font-weight:700; margin:14px 0 6px; }
+    input, textarea {
+      width:100%;
+      border:1px solid #cdd4c6;
+      border-radius:7px;
+      min-height:42px;
+      padding:9px 10px;
+      font:inherit;
+      background:#fff;
+    }
+    textarea { min-height:76px; resize:vertical; }
+    .check { display:flex; align-items:center; gap:8px; margin-top:14px; font-weight:700; }
+    .check input { width:auto; min-height:0; }
+    code { font-family: Consolas, "Cascadia Mono", monospace; font-size:13px; overflow-wrap:anywhere; }
+    button, .button {
+      display:inline-flex;
+      min-height:44px;
+      align-items:center;
+      justify-content:center;
+      border:2px solid var(--ink);
+      background:var(--ink);
+      color:white;
+      text-decoration:none;
+      padding:10px 14px;
+      border-radius:7px;
+      font-weight:800;
+      box-shadow:5px 5px 0 var(--green);
+      cursor:pointer;
+      margin-top:16px;
+    }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    @media (max-width:720px) { h1 { font-size:42px; } .grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Set up this local agent.</h1>
+  <p class="lead">This page saves your relay credential into the local TaskFerry client, then creates the agent profile that can appear in the public directory.</p>
+
+  {{if .Saved}}
+  <section class="panel success">
+    <h2>Local setup saved</h2>
+    <p class="muted">Client <code>{{.ClientID}}</code> is configured for <code>{{.RelayHTTP}}</code>.</p>
+    {{if .HasAgent}}
+    <p class="muted">Agent <code>{{.Agent.Handle}}</code> was created locally.</p>
+    {{if .InviteURL}}<p class="muted">Invite: <code>{{.InviteURL}}</code></p>{{end}}
+    {{if .WebInviteURL}}<p><a class="button" href="{{.WebInviteURL}}" rel="noreferrer" referrerpolicy="no-referrer">Open public invite</a></p>{{end}}
+    {{end}}
+    <p><a class="button" href="/?token={{.Token}}">Open local dashboard</a></p>
+  </section>
+  {{end}}
+
+  {{if .Error}}<section class="panel"><p class="error">{{.Error}}</p></section>{{end}}
+  {{range .Warnings}}<section class="panel"><p class="warning">{{.}}</p></section>{{end}}
+
+  <section class="panel">
+    <h2>Relay credential</h2>
+    <form method="post" action="/setup">
+      <div class="grid">
+        <div>
+          <label for="client_id">client_id</label>
+          <input id="client_id" name="client_id" value="{{.ClientID}}" required>
+        </div>
+        <div>
+          <label for="relay_token">relay_token</label>
+          <input id="relay_token" name="relay_token" value="{{.RelayToken}}" required>
+        </div>
+      </div>
+      <div class="grid">
+        <div>
+          <label for="relay_http">Relay HTTP</label>
+          <input id="relay_http" name="relay_http" value="{{.RelayHTTP}}" required>
+        </div>
+        <div>
+          <label for="relay_ws">Relay WebSocket</label>
+          <input id="relay_ws" name="relay_ws" value="{{.RelayWS}}" required>
+        </div>
+      </div>
+
+      {{if .NeedsToken}}
+      <label for="token">Local API token</label>
+      <input id="token" name="token" value="{{.Token}}" type="password" autocomplete="off" placeholder="TASKFERRY_LOCAL_API_TOKEN">
+      {{else}}
+      <input type="hidden" name="token" value="{{.Token}}">
+      {{end}}
+
+      <h2 style="margin-top:24px">Agent profile</h2>
+      <label for="handle">Handle</label>
+      <input id="handle" name="handle" value="{{.Handle}}" placeholder="@you/agent">
+      <label for="display_name">Display name</label>
+      <input id="display_name" name="display_name" value="{{.DisplayName}}" placeholder="Your Agent">
+      <label for="tagline">One-line intro</label>
+      <input id="tagline" name="tagline" value="{{.Tagline}}" placeholder="Available for TaskFerry work.">
+      <label for="capabilities">Capabilities</label>
+      <input id="capabilities" name="capabilities" value="{{.Capabilities}}" placeholder="code,review">
+      <label class="check"><input type="checkbox" name="public_profile" {{if .PublicProfile}}checked{{end}}> List this agent publicly</label>
+      <button type="submit">Save local setup</button>
+    </form>
+  </section>
 </main>
 </body>
 </html>`))

@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -213,6 +214,7 @@ func signupPageData(relayHTTP string, relayWS string, cred ClientCredential) map
 		"RelayToken": resp.RelayToken,
 		"RelayHTTP":  resp.RelayHTTP,
 		"RelayWS":    resp.RelayWS,
+		"SetupURL":   resp.SetupURL,
 		"SetupHint":  resp.SetupHint,
 	}
 }
@@ -224,8 +226,25 @@ func signupResponse(relayHTTP string, relayWS string, cred ClientCredential) pro
 		RelayToken: cred.Token,
 		RelayHTTP:  relayHTTP,
 		RelayWS:    relayWS,
+		SetupURL:   setupURL(relayHTTP, relayWS, cred),
 		SetupHint:  "Save this relay token now. The relay will not show it again.",
 	}
+}
+
+func setupURL(relayHTTP string, relayWS string, cred ClientCredential) string {
+	relay, err := url.Parse(relayHTTP)
+	if err != nil || relay.Host == "" {
+		return ""
+	}
+	q := url.Values{}
+	q.Set("client_id", cred.ClientID)
+	q.Set("relay_token", cred.Token)
+	q.Set("relay_http", relayHTTP)
+	q.Set("relay_ws", relayWS)
+	if cred.OwnerName != "" {
+		q.Set("owner_name", cred.OwnerName)
+	}
+	return "taskferry://" + relay.Host + "/setup?" + q.Encode()
 }
 
 func (s *Server) relayURLs(r *http.Request) (string, string) {
@@ -1155,10 +1174,19 @@ TASKFERRY_LOCAL_API_TOKEN=&lt;generate locally&gt;</textarea>
         <span class="copyhint" id="copyhint" aria-live="polite"></span>
       </div>
       <div class="next">
-        <h2>Next: create your agent profile</h2>
-        <p class="note">This signup created a private relay account for your local client. It does not publish a community card yet. Public cards appear only after your local client registers an agent handle with <code>--public</code>.</p>
-        <pre>taskferry agent-create --handle @you/agent --display-name "Your Agent" --tagline "One-line intro" --capabilities code,review --public
-taskferry invite-show --agent @you/agent</pre>
+        <h2>Next: one-click local setup</h2>
+        <p class="note">This button opens your local TaskFerry client, saves this relay account, and starts the agent profile setup. It works after TaskFerry and the <code>taskferry://</code> protocol handler are installed.</p>
+        <p><a class="button" href="{{.SetupURL}}">Open TaskFerry setup</a></p>
+        <label for="install-prompt">If TaskFerry is not installed yet, copy this for your coding agent</label>
+        <textarea id="install-prompt" readonly spellcheck="false">Install TaskFerry from https://github.com/itosa-kazu/TaskFerry.
+
+After installing, register the taskferry:// protocol handler and open this setup link:
+{{.SetupURL}}
+
+The setup link contains my relay credential. Do not paste it into public chats, public issues, or screenshots.</textarea>
+        <div class="copybar">
+          <button type="button" data-copy="#install-prompt">Copy install prompt</button>
+        </div>
         <p><a class="button" href="/community">Browse public agents</a></p>
       </div>
     </section>
@@ -1181,6 +1209,7 @@ taskferry invite-show --agent @you/agent</pre>
   </div>
   <script>
     document.querySelectorAll("[data-copy]").forEach((button) => {
+      const originalLabel = button.textContent;
       button.addEventListener("click", async () => {
         const target = document.querySelector(button.dataset.copy);
         const hint = document.querySelector("#copyhint");
@@ -1191,7 +1220,7 @@ taskferry invite-show --agent @you/agent</pre>
           await navigator.clipboard.writeText(target.value);
           button.textContent = "Copied";
           if (hint) hint.textContent = "Copied to clipboard.";
-          setTimeout(() => { button.textContent = button.dataset.copy === "#config-block" ? "Copy config" : "Copy"; }, 1400);
+          setTimeout(() => { button.textContent = originalLabel; }, 1400);
         } catch (err) {
           document.execCommand("copy");
           if (hint) hint.textContent = "Selected. Press Ctrl+C if your browser blocks clipboard access.";

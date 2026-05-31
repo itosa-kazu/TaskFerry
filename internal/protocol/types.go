@@ -164,6 +164,7 @@ type SignupResponse struct {
 	RelayToken string `json:"relay_token,omitempty"`
 	RelayHTTP  string `json:"relay_http,omitempty"`
 	RelayWS    string `json:"relay_ws,omitempty"`
+	SetupURL   string `json:"setup_url,omitempty"`
 	SetupHint  string `json:"setup_hint,omitempty"`
 }
 

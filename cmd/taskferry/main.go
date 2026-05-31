@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 
 	"github.com/itosa-kazu/TaskFerry/internal/localapi"
 )
@@ -41,6 +42,8 @@ dispatch:
 		"health":             cmdHealth,
 		"agent-create":       cmdAgentCreate,
 		"invite-show":        cmdInviteShow,
+		"link-open":          cmdLinkOpen,
+		"setup-open":         cmdSetupOpen,
 		"invite-open":        cmdInviteOpen,
 		"friend-add":         cmdFriendAdd,
 		"connection-request": cmdConnectionRequest,
@@ -111,6 +114,9 @@ func cmdInviteOpen(c *localapi.Client, args []string) (json.RawMessage, error) {
 	if inviteValue == "" {
 		return nil, fmt.Errorf("missing invite")
 	}
+	if isSetupLink(inviteValue) {
+		return openSetupLink(c, inviteValue, *noBrowser)
+	}
 	target := localConnectURL(c, inviteValue)
 	if !*noBrowser {
 		if err := openBrowser(target); err != nil {
@@ -118,6 +124,66 @@ func cmdInviteOpen(c *localapi.Client, args []string) (json.RawMessage, error) {
 		}
 	}
 	raw, err := json.Marshal(map[string]any{"ok": true, "url": target, "opened": !*noBrowser})
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func cmdSetupOpen(c *localapi.Client, args []string) (json.RawMessage, error) {
+	fs := flag.NewFlagSet("setup-open", flag.ContinueOnError)
+	setup := fs.String("setup", "", "taskferry:// relay setup URL")
+	noBrowser := fs.Bool("no-browser", false, "print the local setup URL without opening a browser")
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	setupValue := *setup
+	if setupValue == "" && fs.NArg() > 0 {
+		setupValue = fs.Arg(0)
+	}
+	if setupValue == "" {
+		return nil, fmt.Errorf("missing setup link")
+	}
+	return openSetupLink(c, setupValue, *noBrowser)
+}
+
+func cmdLinkOpen(c *localapi.Client, args []string) (json.RawMessage, error) {
+	fs := flag.NewFlagSet("link-open", flag.ContinueOnError)
+	noBrowser := fs.Bool("no-browser", false, "print the local URL without opening a browser")
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	if fs.NArg() == 0 {
+		return nil, fmt.Errorf("missing taskferry link")
+	}
+	raw := fs.Arg(0)
+	if isSetupLink(raw) {
+		return openSetupLink(c, raw, *noBrowser)
+	}
+	target := localConnectURL(c, raw)
+	if !*noBrowser {
+		if err := openBrowser(target); err != nil {
+			return nil, err
+		}
+	}
+	out, err := json.Marshal(map[string]any{"ok": true, "url": target, "opened": !*noBrowser})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func openSetupLink(c *localapi.Client, setupValue string, noBrowser bool) (json.RawMessage, error) {
+	target, err := localSetupURL(c, setupValue)
+	if err != nil {
+		return nil, err
+	}
+	if !noBrowser {
+		if err := openBrowser(target); err != nil {
+			return nil, err
+		}
+	}
+	raw, err := json.Marshal(map[string]any{"ok": true, "url": target, "opened": !noBrowser})
 	if err != nil {
 		return nil, err
 	}
@@ -142,6 +208,35 @@ func localConnectURL(c *localapi.Client, invite string) string {
 		q.Set("token", c.Token)
 	}
 	return c.BaseURL + "/connect?" + q.Encode()
+}
+
+func localSetupURL(c *localapi.Client, setup string) (string, error) {
+	u, err := url.Parse(setup)
+	if err != nil {
+		return "", err
+	}
+	if !isSetupLink(setup) {
+		return "", fmt.Errorf("unsupported setup link")
+	}
+	q := u.Query()
+	if q.Get("relay_http") == "" {
+		q.Set("relay_http", "https://"+u.Host)
+	}
+	if q.Get("relay_ws") == "" {
+		q.Set("relay_ws", "wss://"+u.Host+"/v1/ws")
+	}
+	if c.Token != "" {
+		q.Set("token", c.Token)
+	}
+	return c.BaseURL + "/setup?" + q.Encode(), nil
+}
+
+func isSetupLink(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "taskferry" && strings.Trim(u.EscapedPath(), "/") == "setup"
 }
 
 func openBrowser(target string) error {
@@ -331,6 +426,8 @@ Commands:
   health
   agent-create --handle @owner/agent --display-name NAME --description TEXT --tagline TEXT --capabilities a,b --public
   invite-show --agent @owner/agent
+  link-open taskferry://relay.example.com/setup?...
+  setup-open taskferry://relay.example.com/setup?...
   invite-open taskferry://relay.example.com/invite/inv_x
   friend-add --from @owner/agent --invite taskferry://relay.example.com/invite/inv_x --message TEXT
   connection-request --from @a/agent --to @b/agent --message TEXT

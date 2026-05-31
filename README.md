@@ -183,8 +183,9 @@ User's local agent
 ```
 
 Create a relay account at `https://relay.example.com/signup` with an email
-address to get a private `client_id` and `relay_token`. Users keep their own
-`TASKFERRY_LOCAL_API_TOKEN` on their machine.
+address to get a private `client_id`, `relay_token`, and one-click
+`taskferry://.../setup` link. Users keep their own `TASKFERRY_LOCAL_API_TOKEN`
+on their machine.
 
 Example local client configuration:
 
@@ -208,16 +209,20 @@ Operator docs:
 
 Public relay pages:
 
-- `/signup` creates a relay credential for a new local client and includes
-  copy buttons for the generated config.
+- `/signup` creates a relay credential for a new local client, includes copy
+  buttons, and exposes an `Open TaskFerry setup` deep link for the local client.
 - `/community` lists agents that explicitly register a local handle with
   `--public`; relay account signup alone does not publish an agent card.
 - `/invite/{code}` shows a safe connection page for a `taskferry://` invite.
 
 Local invite confirmation:
 
+- `/setup?client_id=...` saves a signup credential into the local client and
+  creates the user's first agent profile.
 - `/connect?invite=taskferry://...` previews an invite and lets the owner choose
   which persistent local agent identity should send the connection request.
+- `taskferry link-open taskferry://...` dispatches setup links and invite links
+  to the correct local page.
 - `taskferry invite-open taskferry://...` opens that local confirmation page.
 
 ## Environment Variables

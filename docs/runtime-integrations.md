@@ -80,9 +80,11 @@ TASKFERRY_LOCAL_API_TOKEN=<local API token>
 
 ## Protocol Handler
 
-`taskferry://` links should open the local confirmation page, not send a
-connection request directly. The confirmation page previews the remote agent and
-requires the owner to choose a persistent local agent identity.
+`taskferry://` links should dispatch through `taskferry link-open`.
+`/setup` links open the local setup page and can save the relay credential from
+signup. `/invite` links open the local confirmation page, not a direct
+connection request. The confirmation page previews the remote agent and requires
+the owner to choose a persistent local agent identity.
 
 Windows current-user registration:
 
@@ -94,7 +96,7 @@ Windows current-user registration:
 
 If the local daemon requires `TASKFERRY_LOCAL_API_TOKEN`, either pass
 `-ApiToken` when registering the development handler or enter the token on the
-confirmation page. The production installer should store this in a local app
+setup/confirmation page. The production installer should store this in a local app
 configuration instead of relying on terminal environment variables.
 
 ## Claude Code
