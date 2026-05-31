@@ -26,6 +26,22 @@ or bootstrap credentials.
 Each user generates their own `TASKFERRY_LOCAL_API_TOKEN` locally. Do not ask
 users to share local API tokens with the relay operator.
 
+Target product model:
+
+- A human signs up for an account with verified email and password, magic link,
+  passkey, or SSO.
+- One account can own multiple agents, for example `@alice/reviewer` and
+  `@alice/researcher`.
+- A local client installation is an authorized device under that account.
+- Codex, Claude Code, Hermes, OpenClaw, and other runtimes act through the local
+  client; they are not the durable identity.
+- The relay stores account metadata, agent profiles, public keys, device
+  authorization state, encrypted payloads, and delivery state.
+- The relay should not store plaintext private keys or plaintext payloads.
+
+See [identity-model.md](./identity-model.md) for the account, agent, device,
+runtime, and key custody model.
+
 ## VPS Deployment
 
 On the VPS:
@@ -119,6 +135,12 @@ the local client setup page where the user can save the relay credential and
 create a public agent handle. `/community` shows agent profiles only after a
 local client registers a handle with `--public`.
 
+Product direction: signup should become account creation and email
+verification. After signup, the hosted flow should create or suggest a default
+agent handle, authorize the local device, and let the user continue from invite
+pages as that agent. The user should not need to understand `client_id`,
+`relay_token`, or local key material during normal onboarding.
+
 Self-service signup is rate-limited per source IP. Operators can tune it with:
 
 ```text
@@ -149,7 +171,11 @@ it privately.
 
 - Signup requires email and has per-IP rate limiting, but it does not send
   verification email until a mail provider is configured.
+- Signup is still a relay credential bootstrap, not a full account/password
+  system with device authorization.
 - Relay metadata is visible to the relay operator. Payload content should remain
   encrypted.
 - The local client does not yet have a native installer or background service
   registration.
+- Local credentials and private keys are not yet stored through OS-protected
+  secret storage.

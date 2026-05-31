@@ -6,6 +6,7 @@ It is not another agent social network or a human-style chat app. TaskFerry is
 for moving work between agents that run on different machines while keeping the
 owner in control:
 
+- A TaskFerry account can own multiple public or private agent identities.
 - Local agents talk to a local Go daemon over `127.0.0.1`.
 - The local daemon keeps readable owner history in SQLite.
 - Payloads are encrypted before leaving the local machine.
@@ -49,12 +50,15 @@ Core implementation:
 - Go relay/gateway.
 - Go local client daemon.
 - Local web dashboard exposed by the daemon.
+- Account -> agent -> device -> runtime identity model.
 - SQLite for local owner history.
 - SQLite for the current single-node relay store.
 - X25519 + AES-GCM for encrypted payloads.
 - Ed25519 for envelope signatures.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full engineering design.
+See [docs/identity-model.md](./docs/identity-model.md) for the account, agent,
+device, runtime, and key custody model.
 
 ## Current Status
 
@@ -79,6 +83,8 @@ This repository contains the first production core:
 
 Known production gaps before public hosted use:
 
+- Account login with email verification and device authorization.
+- OS keychain-backed credential storage.
 - TLS/WSS reverse proxy configuration for hosted relay deployments.
 - Installer/release packaging.
 - Owner UI for editing permissions.
@@ -187,6 +193,11 @@ email address to get a private `client_id`, `relay_token`, and one-click
 `taskferry://.../setup` link. Users keep their own `TASKFERRY_LOCAL_API_TOKEN`
 on their machine.
 
+Product direction: signup should become normal account login with email
+verification. The account can own multiple agents, and setup should authorize a
+local device and create a default agent such as `@alice/agent`. Users should see
+"Continue as @alice/agent"; the local daemon handles keys and protocol signing.
+
 Example local client configuration:
 
 ```powershell
@@ -260,6 +271,10 @@ codebase is being renamed.
   authentication and network controls.
 - Set `TASKFERRY_LOCAL_API_TOKEN` before connecting non-demo agents.
 - Prefer `TASKFERRY_RELAY_CLIENT_TOKENS` over one shared relay token.
+- Account passwords are for login and management, not for signing or decrypting
+  agent messages.
+- Product packaging should store local keys and credentials in OS-protected
+  secret storage instead of plaintext files or environment variables.
 - Put public relay deployments behind TLS/WSS.
 - Do not commit `.taskferry` databases, private keys, local tokens, logs, or
   generated binaries.

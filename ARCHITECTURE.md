@@ -20,8 +20,10 @@ task and message events.
   `client_id=token` mapping so each local client has its own relay credential.
 - Relationship model: request/approval, similar to adding a contact before
   direct work can be assigned.
-- Identity model: handles are human-readable names, not proof of identity.
-  Agents need stable IDs, device IDs, sessions, and signing keys.
+- Product identity model: one account can own multiple agent identities.
+  Handles are human-readable names, not proof of identity.
+- Key custody model: account login authorizes management actions; local
+  device/agent keys authorize protocol actions.
 
 ## System Shape
 
@@ -44,6 +46,37 @@ and exposes a small local API for agents.
 The relay is a delivery network. It registers agent profiles, verifies that a
 client can send as a given agent, checks connection permissions, queues messages
 for offline clients, and forwards encrypted envelopes.
+
+## Product Identity Model
+
+TaskFerry should look like an account-based product without turning an account
+password into a protocol key.
+
+```text
+Account: alice@example.com
+  Agent: @alice/reviewer
+  Agent: @alice/researcher
+  Device: Alice Windows desktop
+  Device: Alice VPS worker
+  Runtime: Codex, Claude Code, Hermes, OpenClaw, or another local agent runtime
+```
+
+The account owns billing, email verification, recovery, quotas, device
+management, and agent management. An account can have multiple agents.
+
+An agent is the communication identity. Other users connect to `@alice/reviewer`
+or `@alice/researcher`, not to `alice@example.com`. The same agent identity can
+be operated by different local runtimes over time.
+
+A device is an authorized local client installation. It holds protected local
+key material and readable local history. The relay should be able to revoke a
+device for future sends, but the relay should not hold plaintext private keys.
+
+A runtime is the worker program that calls the local daemon: Codex, Claude Code,
+Hermes, OpenClaw, a shell script, or a custom agent process.
+
+See [docs/identity-model.md](./docs/identity-model.md) for the full account,
+agent, device, runtime, and recovery model.
 
 ## Components
 
@@ -151,21 +184,36 @@ The system does not judge task quality. The requesting agent judges the artifact
 and then emits `revision_request` or `task_complete`. TaskFerry records delivery,
 state, versions, and audit trail.
 
-## Identity
+## Identity and Key Custody
 
 Do not treat `@owner/agent` as identity proof. It is a handle.
 
-Production identity should include:
+Production identity should separate product login from protocol authority:
 
 ```text
-user_id / org_id
-agent_id
-device_id
+account_id / org_id
+agent_id + handle
+device_id + device public key
 session_id
-handle
-signing_public_key
-encryption_public_key
+agent signing public key
+agent encryption public key
 ```
+
+Account credentials are for login, billing, recovery, and management. They
+should not sign task envelopes and should not decrypt payload history.
+
+Agent/device keys are for protocol actions. The local client signs envelopes,
+decrypts inbound payloads, and encrypts outbound payloads. The relay stores
+public keys and verifies Ed25519 signatures on envelopes.
+
+Target private-key storage:
+
+- Windows Credential Manager or DPAPI.
+- macOS Keychain.
+- Linux Secret Service, KWallet, or another configured secret store.
+
+Optional cloud backup can be offered later, but only as ciphertext encrypted
+with a user-held recovery secret, passkey-backed secret, or recovery phrase.
 
 Current local core already creates:
 
@@ -176,7 +224,9 @@ Current local core already creates:
 - Ed25519 signing keypair
 - X25519 encryption keypair
 
-The relay stores public keys and verifies Ed25519 signatures on envelopes.
+Current development bootstrap can still use local files, environment variables,
+and SQLite. Product packaging should move relay credentials, local API tokens,
+and private keys out of plaintext config.
 
 ## Relationship and Permissions
 
@@ -442,7 +492,8 @@ explicit data residency policy
 - No migration framework yet.
 - No spam/reputation controls yet.
 - No metrics/trace pipeline yet.
-- No key rotation or recovery yet.
+- No OS keychain-backed credential storage yet.
+- No key rotation or encrypted recovery yet.
 
 ## Verification
 
